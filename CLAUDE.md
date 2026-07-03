@@ -1,0 +1,96 @@
+# CLAUDE.md — Joule MVP (project memory & handoff log)
+
+> This file is auto-loaded by Claude Code every session. It is the handoff brief
+> from the previous agent. Read `README.md` for user-facing run instructions;
+> this file is the behavioral contract + current state. Keep it under ~200 lines.
+
+## What this is
+Joule is positioned as **the measurement & compliance control plane for sovereign AI**
+(built for a Hub71+ AI accelerator application, Abu Dhabi). The product thesis:
+*measure, optimize, and prove the cost and carbon of AI inference.* Routing to a
+cheaper model is **one module, not the product** — the strategic wedge is
+**measurement + audit-ready carbon/cost compliance** for Gulf government/regulated buyers.
+
+This repo is the **working MVP**: a drop-in, OpenAI-compatible proxy that meters every
+request (cost/energy/carbon), routes simple prompts to a smaller model, and exports an
+audit-style report. Single founder (Joshia Kriel). Non-coding/business work happens
+elsewhere — this repo is code only.
+
+## Status — verified working (2026-07-03)
+Built and smoke-tested end-to-end in `DRY_RUN` mode:
+- 6 mixed prompts → **4 routed small / 2 large** (classifier correct), **1 cache hit**.
+- Aggregated **~64% energy saved** vs. an always-large baseline; cost/CO₂ savings tracked.
+- `GET /api/report` returns JSON + CSV with a methodology block (GHG Scope 2 + SCI).
+- Grid intensity falls back to a labelled constant when `ELECTRICITYMAPS_TOKEN` is unset.
+
+Not yet done: streaming, tests, real classifier, persistent DB, auth. See "Next steps".
+
+## Run / test
+```bash
+npm install
+cp .env.example .env      # DRY_RUN=true by default — full pipeline, no external calls, no cost
+npm start                 # dashboard: http://localhost:3000 ; proxy: http://localhost:3000/v1
+```
+Go live: set `DRY_RUN=false`, add `UPSTREAM_API_KEY` (+ optional `ELECTRICITYMAPS_TOKEN`).
+**Always use `DRY_RUN=true` for automated tests** — CI/sandboxes may have no provider or
+Electricity Maps network access; `carbon.js` degrades gracefully. Start→test→teardown in a
+single shell invocation to avoid orphaned background servers.
+
+## Architecture (all under `src/`, CommonJS)
+- `config.js`  — ALL tunables from env: models, pricing table, energy factors, grid zone, flags. `priceFor(model,tier)`.
+- `router.js`  — `classify(text)` heuristic (regex signals + length) → `{tier, score, signals, confidence}`; `selectModel`, `tierForModel`.
+- `carbon.js`  — `getIntensity()` → live Electricity Maps gCO₂/kWh with 10-min cache and labelled fallback.
+- `metrics.js` — `compute({...})` → `{actual, baseline, saved, totalTokens}`. Cost exact; energy estimated; carbon = energy×intensity.
+- `store.js`   — append-only JSONL log (`data/log.jsonl`) + in-memory mirror; `aggregate()`, `recent()`, `toCsv()`.
+- `server.js`  — Express: `POST /v1/chat/completions` (routes+meters+logs; streams SSE when `stream:true` via `handleStreaming`), `GET /api/stats|report|health`, serves `public/`.
+- `public/index.html` — live dashboard (vanilla JS, polls `/api/stats`, sends test prompts, downloads report).
+- `test/` — `node:test` suite (`router`, `metrics`, `store`, `integration`). Runs offline in DRY_RUN via `npm test`; integration mounts `app` on an ephemeral port and points `store.init(tmpDir)` at a temp data dir. Testability hooks: `server.js` exports `app` and only auto-listens when run directly; `store.init(dir)` accepts an optional data dir (default unchanged).
+- `scripts/demo.js` — dependency-free seed script (`npm run demo`); fires ~30 varied prompts (trivial/format/reason/code + repeats for cache) at `argv[2]`/`DEMO_TARGET` (default localhost) via global `fetch`, prints a small/large/cached summary. Deploy tooling: `render.yaml` (Blueprint), `Dockerfile` + `.dockerignore`, `.node-version` (22).
+
+## Data contracts (do not break silently)
+- **Proxy request/response**: OpenAI Chat Completions shape. Clients set only `baseURL=…/v1`.
+- **Metrics on response headers**: `x-joule-mode|tier|model|cost-usd|energy-wh|co2-g|saved-usd|saved-co2-g`.
+- **Log record**: `{ts, mode('live'|'dry_run'|'cache'), cached, model, tier, signals, confidence,
+  promptTokens, completionTokens, totalTokens, actual{costUsd,energyWh,carbonG}, baseline{…}, saved{…}, grid{gPerKwh,zone,source,live}, latencyMs}`.
+- **/api/stats**: `{config, grid, totals{requests,cacheHits,routedSmall,routedLarge,tokens,cost,energyWh,carbonG,savedPct}, recent[]}`.
+
+## Immutable rules (these are load-bearing — don't regress them)
+1. **Keep the OpenAI-compatible contract** on `/v1/chat/completions`. Drop-in is the whole point.
+2. **Keep the numbers honest.** Cost is exact (token usage × configured price). Energy is an
+   ESTIMATE (no provider exposes Wh) — always labelled as such. Carbon = energy × grid intensity.
+   Never present estimates as measured. Keep the `methodology` block in `/api/report`.
+3. **Config-driven, not hardcoded.** New knobs go in `config.js` + `.env.example`.
+4. **Minimal deps.** CommonJS, Node ≥18 (global `fetch`). Only `express` + `dotenv`. 2-space indent.
+   Don't add a framework/DB/build step without a clear reason.
+5. **Never commit** `.env`, real keys, or `data/` (already in `.gitignore`).
+6. **Routing is one module.** Don't let the router balloon into "the product" — measurement +
+   compliance is the moat. Invest there.
+
+## Known limitations / tech debt
+- **Streaming metrics ride the store, not headers.** `stream:true` requests get a real SSE stream and are still routed/metered/logged (visible in `/api/stats` + `/api/report`), but the `x-joule-*` response headers are NOT set — headers flush before token usage is known. Non-streaming still returns headers.
+- **Classifier is a heuristic** (regex + length). Fine for a demo; not robust. No eval set yet.
+- **Cache is normalized-exact** (lowercased/trimmed string match), not semantic/embedding-based.
+- **Store is single-node JSONL**; ephemeral on serverless. Interface is tiny — swap for Postgres.
+- **Render free tier is ephemeral + sleeps.** The disk resets on every deploy/restart (`data/log.jsonl` is not durable — re-run `npm run demo` to repopulate), and the instance spins down after ~15 min idle (first request after cold-starts, ~30–60s). Fine for a demo URL; not for durable metrics.
+- **No auth / multi-tenant**, no per-project separation.
+- **Energy factors are per-tier**, not per-model or measured.
+- Only `/chat/completions` is proxied (no `/models`, `/embeddings`, etc.).
+
+## Next steps (prioritized feature checklist)
+- [x] **Streaming (SSE) passthrough** while still metering from `usage` (or estimating on stream end). Live mode adds `stream_options:{include_usage:true}` and pipes chunks unmodified; dry-run synthesizes an SSE stream. Metrics land in the store (not `x-joule-*` headers) — see Known limitations.
+- [x] **Unit + integration tests** (router, metrics, store, proxy) — `node --test` in `test/`, all offline in DRY_RUN. Run with `npm test`.
+- [x] **Deploy-prep** — `render.yaml` Blueprint (free tier, boots in DRY_RUN so the URL is instantly live), `Dockerfile` (`node:22-slim`) for other hosts, `.node-version` (22), and `scripts/demo.js` (`npm run demo`) to seed the dashboard for a screenshot. See README "Deploy to Render"; ephemeral-disk + spin-down caveats in Known limitations.
+- [ ] **Real classifier** (small fine-tuned / embedding model) + a labelled eval set; keep the interface.
+- [ ] **Semantic cache** (embeddings) replacing normalized-exact.
+- [ ] **Persistent store** (Postgres) behind `store.js`; keep JSONL for local dev.
+- [ ] **Per-model measured energy profiles**; move energy config from per-tier to per-model.
+- [ ] **Auth + API keys + per-project dashboards**.
+- [ ] **Scope 2/3 + SCI export templates** an auditor accepts out-of-the-box (the compliance wedge).
+- [ ] **Quality guardrail**: verify the small-model answer clears a bar; escalate to large on low confidence.
+- [ ] **Grid-aware scheduling** module: defer batch/deferrable jobs to low-intensity windows.
+
+## Gotchas
+- Cache populates for **all non-cache modes** (dry_run + live), not just live — see `server.js`.
+- `carbon.js` caches intensity ~10 min and **always returns a value** (fallback labelled in `grid.source`).
+- Savings = baseline (same tokens, always-large) − actual. A prompt correctly routed to `large` shows ~0 saved — that's expected, not a bug.
+- Dashboard reads metrics off response **headers** (same-origin fetch), and aggregates via `/api/stats` polling.

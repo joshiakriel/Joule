@@ -1,0 +1,30 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# Connect the repo in Render → "New Blueprint" and it provisions this service.
+# The URL works instantly in DRY_RUN (no keys). Flip DRY_RUN=false + set the two
+# secret env vars in the dashboard to make real calls.
+services:
+  - type: web
+    name: joule-mvp
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      # Defaults so the deployed URL is live immediately, no configuration needed.
+      - key: DRY_RUN
+        value: "true"
+      - key: ROUTING_ENABLED
+        value: "true"
+      - key: MODEL_SMALL
+        value: gpt-4o-mini
+      - key: MODEL_LARGE
+        value: gpt-4o
+      - key: GRID_ZONE
+        value: AE
+      # Secrets — set these in the Render dashboard, never in the repo.
+      - key: UPSTREAM_API_KEY
+        sync: false
+      - key: ELECTRICITYMAPS_TOKEN
+        sync: false
