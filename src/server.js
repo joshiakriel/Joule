@@ -3,9 +3,19 @@ const path = require("path");
 const express = require("express");
 const config = require("./config");
 const { classify, selectModel, tierForModel } = require("./router");
-const { getIntensity } = require("./carbon");
+const { getIntensity, invalidate: invalidateIntensity } = require("./carbon");
 const { compute } = require("./metrics");
 const store = require("./store");
+
+// Replace any live secret value with *** before a string leaves the process
+// (error messages, etc.). Secrets are never logged or returned by any endpoint.
+function scrub(s) {
+  let out = String(s == null ? "" : s);
+  for (const secret of [config.upstreamApiKey, config.emToken]) {
+    if (secret && secret.length >= 4) out = out.split(secret).join("***");
+  }
+  return out;
+}
 
 store.init();
 const app = express();
@@ -244,7 +254,7 @@ app.post("/v1/chat/completions", async (req, res) => {
   } catch (err) {
     // once an SSE stream has started, headers are already flushed — just end it
     if (res.headersSent) { try { res.end(); } catch { /* client gone */ } }
-    else res.status(502).json({ error: { message: "joule proxy error: " + err.message } });
+    else res.status(502).json({ error: { message: scrub("joule proxy error: " + err.message) } });
   }
 });
 
@@ -264,6 +274,84 @@ app.get("/api/stats", async (_req, res) => {
     totals: store.aggregate(),
     recent: store.recent(25)
   });
+});
+
+// ---- runtime configuration (masked; secret-free) ----------------------------
+// A MASKED, secret-free view of the effective config plus per-field provenance.
+// Secrets are reported only as booleans + last-4; the raw values never leave here.
+function maskedConfig() {
+  const key = config.upstreamApiKey;
+  const fields = ["dryRun", "routingEnabled", "modelSmall", "modelLarge", "upstreamBaseUrl", "gridZone", "upstreamApiKey", "emToken"];
+  const sources = {};
+  for (const f of fields) sources[f] = config.sourceOf(f);
+  return {
+    dryRun: config.dryRun,
+    routingEnabled: config.routingEnabled,
+    modelSmall: config.modelSmall,
+    modelLarge: config.modelLarge,
+    upstreamBaseUrl: config.upstreamBaseUrl,
+    gridZone: config.gridZone,
+    hasUpstreamKey: Boolean(key),
+    upstreamKeyLast4: key ? key.slice(-4) : null,
+    hasEmToken: Boolean(config.emToken),
+    sources
+  };
+}
+
+// Per-field validators. Each returns the value to apply, or throws a safe message.
+// Only these keys are accepted; anything else is rejected as an unknown field.
+const strField = (v, name) => {
+  if (typeof v !== "string" || !v.trim() || v.length > 120) throw name + " must be a non-empty string";
+  return v.trim();
+};
+const boolField = (v, name) => {
+  if (typeof v === "boolean") return v;
+  if (v === "true" || v === "false") return v === "true";
+  throw name + " must be a boolean";
+};
+const CONFIG_FIELDS = {
+  upstreamApiKey: (v) => { if (typeof v !== "string") throw "upstreamApiKey must be a string"; return v.trim(); },
+  emToken: (v) => { if (typeof v !== "string") throw "emToken must be a string"; return v.trim(); },
+  upstreamBaseUrl: (v) => {
+    if (typeof v !== "string") throw "upstreamBaseUrl must be a string";
+    let u; try { u = new URL(v.trim()); } catch { throw "upstreamBaseUrl must be a valid URL"; }
+    if (u.protocol !== "http:" && u.protocol !== "https:") throw "upstreamBaseUrl must be http(s)";
+    return v.trim();
+  },
+  modelSmall: (v) => strField(v, "modelSmall"),
+  modelLarge: (v) => strField(v, "modelLarge"),
+  gridZone: (v) => {
+    if (typeof v !== "string" || !/^[A-Za-z0-9-]{1,20}$/.test(v)) throw "gridZone must be short alphanumeric/hyphen";
+    return v;
+  },
+  routingEnabled: (v) => boolField(v, "routingEnabled"),
+  dryRun: (v) => boolField(v, "dryRun")
+};
+
+app.get("/api/config", (_req, res) => res.json(maskedConfig()));
+
+app.post("/api/config", (req, res) => {
+  const body = req.body || {};
+  const keys = Object.keys(body);
+  const unknown = keys.filter((k) => !CONFIG_FIELDS[k]);
+  if (unknown.length) return res.status(400).json({ error: { message: "unknown field(s): " + unknown.join(", ") } });
+
+  const toApply = {};
+  try {
+    for (const k of keys) {
+      const val = CONFIG_FIELDS[k](body[k]);
+      // Blank secret means "leave as is" — don't wipe an env-provided secret.
+      if ((k === "upstreamApiKey" || k === "emToken") && val === "") continue;
+      toApply[k] = val;
+    }
+  } catch (msg) {
+    return res.status(400).json({ error: { message: String(msg) } });
+  }
+
+  config.setOverrides(toApply);
+  // A new region/token means the cached grid intensity is stale.
+  if ("gridZone" in toApply || "emToken" in toApply) invalidateIntensity();
+  res.json(maskedConfig());
 });
 
 // ---- audit-style report (JSON or CSV) ----

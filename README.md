@@ -59,6 +59,20 @@ curl http://localhost:3000/v1/chat/completions \
 
 **Streaming** works too — set `"stream": true` for an OpenAI-style SSE stream (`client.chat.completions.create({..., stream:true})`, or `curl -N ... -d '{"model":"auto","stream":true,"messages":[...]}'`). Streamed requests are still routed, metered, and logged (they show up in `/api/stats` and `/api/report`), but the `x-joule-*` metrics headers aren't set — headers flush before token usage is known.
 
+## Configure in the UI
+
+The dashboard's **"Configure your instance"** panel lets you set the provider API key,
+base URL, small/large models, Electricity Maps token and grid region at runtime — no
+redeploy. Each field shows its source (*from environment* vs *set here*), and settings you
+enter override the env defaults while env stays the fallback (so Render-provided secrets
+keep working). `POST /api/config` accepts the same fields programmatically.
+
+> **Security.** Secrets (API key, EM token) are held **in memory only** — never written to
+> disk, never logged, and never returned by any endpoint; `GET /api/config` exposes only
+> booleans + the last 4 characters. Runtime key entry is a **single-tenant demo
+> convenience**: the overrides are one shared in-memory bag with no auth. Multi-tenant
+> production needs authentication and encrypted per-user secret storage.
+
 ## Endpoints
 
 | Route | Purpose |
@@ -66,6 +80,7 @@ curl http://localhost:3000/v1/chat/completions \
 | `POST /v1/chat/completions` | OpenAI-compatible proxy (routes + meters) |
 | `GET /api/stats` | Live totals + recent log (the dashboard uses this) |
 | `GET /api/report?format=json\|csv` | Downloadable audit-style cost & emissions report |
+| `GET · POST /api/config` | Masked runtime config — read effective settings / apply overrides (secret-free) |
 | `GET /api/health` | Health check |
 | `GET /` | Live console (dashboard) |
 

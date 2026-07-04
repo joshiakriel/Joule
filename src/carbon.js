@@ -9,6 +9,10 @@ const config = require("./config");
  */
 let cache = { value: null, ts: 0 };
 
+// Drop the cached intensity so the next call re-resolves — used when the grid
+// zone or EM token changes at runtime (POST /api/config).
+function invalidate() { cache = { value: null, ts: 0 }; }
+
 async function getIntensity() {
   const now = Date.now();
   if (cache.value && now - cache.ts < 1000 * 60 * 10) return cache.value;
@@ -48,4 +52,4 @@ async function getIntensity() {
   }
 }
 
-module.exports = { getIntensity };
+module.exports = { getIntensity, invalidate };

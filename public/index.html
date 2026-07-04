@@ -81,6 +81,38 @@
   .dl{font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:13px;background:var(--panel2);color:var(--cyan);border:1px solid rgba(51,227,199,.3);border-radius:9px;padding:9px 14px;cursor:pointer;text-decoration:none;display:inline-block}
   footer{margin-top:24px;color:var(--muted);font-size:10.5px;font-family:'JetBrains Mono',monospace;line-height:1.6}
   .empty-log{color:var(--muted);font-size:12.5px;font-style:italic;padding:10px 4px}
+  /* inputs / selects (shared) */
+  input[type=text],input[type=password],select{width:100%;background:var(--ink);border:1px solid var(--line2);border-radius:9px;color:var(--text);font-family:'Inter',sans-serif;font-size:13px;padding:9px 11px;outline:none}
+  input:focus,select:focus{border-color:var(--cyan);box-shadow:0 0 0 3px var(--cyan-dim)}
+  select{appearance:none;cursor:pointer}
+  /* architecture strip */
+  .arch{margin:0 0 20px}
+  .arch-flow{display:flex;align-items:stretch;gap:10px;flex-wrap:wrap}
+  .arch-node{flex:1;min-width:150px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+  .arch-node.joule{border-color:rgba(51,227,199,.35);background:linear-gradient(160deg,var(--panel2),var(--panel));box-shadow:inset 0 0 24px rgba(51,227,199,.08)}
+  .an-t{font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:14px}
+  .arch-node.joule .an-t{color:var(--cyan);letter-spacing:.06em}
+  .an-s{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--muted);margin-top:3px}
+  .an-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
+  .an-tags span{font-family:'JetBrains Mono',monospace;font-size:9.5px;color:var(--cyan);background:var(--cyan-dim);border:1px solid rgba(51,227,199,.25);padding:2px 6px;border-radius:5px}
+  .arch-ar{display:flex;align-items:center;color:var(--muted);font-size:18px}
+  .arch-grid{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--muted);margin-top:9px;display:flex;align-items:center;gap:7px}
+  .arch-grid .gdot{width:7px;height:7px;border-radius:50%;background:var(--amber);box-shadow:0 0 8px var(--amber);flex:none}
+  .snip{margin-top:12px;background:var(--ink);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .snip-h{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line);font-size:11px;color:var(--muted)}
+  .snip pre{margin:0;padding:11px 12px;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--text);white-space:pre;overflow:auto}
+  .copy{font-family:'JetBrains Mono',monospace;font-size:10.5px;background:var(--panel2);color:var(--cyan);border:1px solid rgba(51,227,199,.3);border-radius:7px;padding:4px 9px;cursor:pointer;flex:none}
+  .copy:hover{filter:brightness(1.1)}
+  /* configure panel */
+  .cfg-lead{font-size:12.5px;color:var(--muted);margin:-4px 0 14px;max-width:820px}
+  .cfg-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media(max-width:620px){.cfg-grid{grid-template-columns:1fr}}
+  .cfg-f{display:flex;flex-direction:column;gap:6px}
+  .cfg-lbl{font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.05em;color:var(--muted);text-transform:uppercase}
+  .src{font-style:normal;color:var(--muted);opacity:.85;text-transform:none;letter-spacing:0;font-size:10px}
+  .cfg-toggles{display:flex;gap:22px;margin:15px 0 4px;flex-wrap:wrap}
+  .tog{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text);cursor:pointer}
+  .tog input{width:16px;height:16px;accent-color:var(--cyan);cursor:pointer}
 </style>
 </head>
 <body>
@@ -93,6 +125,24 @@
     <div class="status" id="status"></div>
   </header>
   <div class="tagline">Real proxy, real tokens, real grid. Point any OpenAI client at <span class="mono cyan">/v1</span>, or send a test prompt below — Joule routes it, meters cost · energy · carbon, and logs an auditable record.</div>
+
+  <div class="arch">
+    <div class="arch-flow">
+      <div class="arch-node client"><div class="an-t">Your app / agent</div><div class="an-s">OpenAI SDK · baseURL → Joule</div></div>
+      <div class="arch-ar">→</div>
+      <div class="arch-node joule">
+        <div class="an-t">JOULE</div>
+        <div class="an-tags"><span>classify</span><span>route</span><span>meter</span><span>report</span></div>
+      </div>
+      <div class="arch-ar">→</div>
+      <div class="arch-node prov"><div class="an-t">Model provider</div><div class="an-s" id="archProv">api.openai.com</div></div>
+    </div>
+    <div class="arch-grid"><span class="gdot"></span> live grid carbon (Electricity Maps) feeds Joule's metering — cost · energy · CO₂ per request</div>
+    <div class="snip">
+      <div class="snip-h"><span>Point any OpenAI client at Joule — change one line:</span><button class="copy" id="copySnip">Copy</button></div>
+      <pre id="snippet"></pre>
+    </div>
+  </div>
 
   <div class="grid">
     <div class="card">
@@ -123,6 +173,45 @@
         <div class="kpi"><div class="n cyan" id="kEnergy">0 Wh</div><div class="l">Energy saved</div><div class="s" id="kCache">0 cache hits</div></div>
         <div class="kpi"><div class="n cyan" id="kCo2">0 g</div><div class="l">CO₂ avoided</div><div class="s" id="kGrid">grid —</div></div>
       </div>
+    </div>
+  </div>
+
+  <div class="card" id="cfgCard" style="margin-top:18px">
+    <h2>Configure your instance</h2>
+    <p class="cfg-lead">Set the provider key, models and grid region for this Joule instance. Values set here override the environment defaults and are kept <b>in memory only</b> — never written to disk, never returned by the API. <span class="muted">(Single-tenant demo convenience — see the README security note.)</span></p>
+    <div class="cfg-grid">
+      <label class="cfg-f">
+        <span class="cfg-lbl">Provider API key <em class="src" id="src-upstreamApiKey"></em></span>
+        <input type="password" id="cfg-upstreamApiKey" autocomplete="off" placeholder="sk-…">
+      </label>
+      <label class="cfg-f">
+        <span class="cfg-lbl">Base URL <em class="src" id="src-upstreamBaseUrl"></em></span>
+        <input type="text" id="cfg-upstreamBaseUrl" placeholder="https://api.openai.com/v1">
+      </label>
+      <label class="cfg-f">
+        <span class="cfg-lbl">Model · small <em class="src" id="src-modelSmall"></em></span>
+        <input type="text" id="cfg-modelSmall" placeholder="gpt-4o-mini">
+      </label>
+      <label class="cfg-f">
+        <span class="cfg-lbl">Model · large <em class="src" id="src-modelLarge"></em></span>
+        <input type="text" id="cfg-modelLarge" placeholder="gpt-4o">
+      </label>
+      <label class="cfg-f">
+        <span class="cfg-lbl">Electricity Maps token <em class="src" id="src-emToken"></em></span>
+        <input type="password" id="cfg-emToken" autocomplete="off" placeholder="optional — live grid carbon">
+      </label>
+      <label class="cfg-f">
+        <span class="cfg-lbl">Grid region <em class="src" id="src-gridZone"></em></span>
+        <select id="cfg-gridZone"></select>
+      </label>
+    </div>
+    <div class="cfg-toggles">
+      <label class="tog"><input type="checkbox" id="cfg-routingEnabled"><span>Routing <em class="src" id="src-routingEnabled"></em></span></label>
+      <label class="tog"><input type="checkbox" id="cfg-dryRun"><span>Dry-run mode <em class="src" id="src-dryRun"></em></span></label>
+    </div>
+    <div class="run">
+      <button id="cfg-save">Save configuration</button>
+      <span id="cfg-msg" class="reason"></span>
     </div>
   </div>
 
@@ -233,6 +322,74 @@ async function refresh() {
     " &nbsp;·&nbsp; cost exact from token usage · energy estimated (IEA/Epoch, configurable) · carbon = energy × grid intensity (GHG Scope 2) · SCI / ISO-IEC 21031 aligned";
 }
 
+// ---- integration snippet (how a client points at Joule) ----
+const origin = window.location.origin;
+$("snippet").textContent =
+  'import OpenAI from "openai";\n' +
+  'const client = new OpenAI({\n' +
+  '  baseURL: "' + origin + '/v1",   // ← the only change\n' +
+  '  apiKey: "unused-in-dry-run"\n' +
+  '});';
+$("copySnip").onclick = async () => {
+  try { await navigator.clipboard.writeText($("snippet").textContent); const b=$("copySnip"); b.textContent="Copied ✓"; setTimeout(()=>b.textContent="Copy",1500); } catch {}
+};
+
+// ---- configure-your-instance panel ----
+const ZONES = ["AE","ZA","DE","FR","GB","US-CAL-CISO","IN","AU","SG"];
+const zoneSel = $("cfg-gridZone");
+ZONES.forEach(z => { const o=document.createElement("option"); o.value=z; o.textContent=z; zoneSel.appendChild(o); });
+const srcLabel = (s) => s==="runtime" ? "· set here" : s==="env" ? "· from environment" : "· default";
+let loadedCfg = {};
+
+async function loadConfig() {
+  let c; try { c = await (await fetch("/api/config")).json(); } catch { return; }
+  loadedCfg = c;
+  try { $("archProv").textContent = new URL(c.upstreamBaseUrl).host; } catch { $("archProv").textContent = c.upstreamBaseUrl; }
+  $("cfg-upstreamBaseUrl").value = c.upstreamBaseUrl || "";
+  $("cfg-modelSmall").value = c.modelSmall || "";
+  $("cfg-modelLarge").value = c.modelLarge || "";
+  if (c.gridZone && !ZONES.includes(c.gridZone)) { const o=document.createElement("option"); o.value=c.gridZone; o.textContent=c.gridZone; zoneSel.appendChild(o); }
+  zoneSel.value = c.gridZone || "AE";
+  $("cfg-routingEnabled").checked = !!c.routingEnabled;
+  $("cfg-dryRun").checked = !!c.dryRun;
+  // secrets: never prefill — show masked status only
+  $("cfg-upstreamApiKey").value = "";
+  $("cfg-upstreamApiKey").placeholder = c.hasUpstreamKey ? ("configured ••••" + (c.upstreamKeyLast4 || "")) : "sk-…";
+  $("cfg-emToken").value = "";
+  $("cfg-emToken").placeholder = c.hasEmToken ? "configured ••••" : "optional — live grid carbon";
+  const s = c.sources || {};
+  ["upstreamApiKey","upstreamBaseUrl","modelSmall","modelLarge","emToken","gridZone","routingEnabled","dryRun"]
+    .forEach(f => { const el=$("src-"+f); if (el) el.textContent = srcLabel(s[f]); });
+}
+
+async function saveConfig() {
+  const btn=$("cfg-save"), msg=$("cfg-msg");
+  const body = {};
+  const add = (k, v) => { if (v !== loadedCfg[k]) body[k] = v; };
+  add("upstreamBaseUrl", $("cfg-upstreamBaseUrl").value.trim());
+  add("modelSmall", $("cfg-modelSmall").value.trim());
+  add("modelLarge", $("cfg-modelLarge").value.trim());
+  add("gridZone", zoneSel.value);
+  add("routingEnabled", $("cfg-routingEnabled").checked);
+  add("dryRun", $("cfg-dryRun").checked);
+  const key = $("cfg-upstreamApiKey").value.trim(); if (key) body.upstreamApiKey = key;
+  const em = $("cfg-emToken").value.trim(); if (em) body.emToken = em;
+  if (!Object.keys(body).length) { msg.style.color=""; msg.textContent="No changes to save."; setTimeout(()=>msg.textContent="",2000); return; }
+  btn.disabled=true; msg.style.color=""; msg.textContent="Saving…";
+  try {
+    const r = await fetch("/api/config", { method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify(body) });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error?.message || "save failed");
+    msg.style.color="var(--cyan)"; msg.textContent="Saved ✓";
+    await loadConfig(); await refresh();
+    setTimeout(()=>{ msg.textContent=""; }, 2500);
+  } catch (e) {
+    msg.style.color="var(--amber)"; msg.textContent=e.message;
+  } finally { btn.disabled=false; }
+}
+$("cfg-save").onclick = saveConfig;
+
+loadConfig();
 refresh();
 setInterval(refresh, 4000);
 </script>
