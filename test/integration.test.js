@@ -17,10 +17,10 @@ const app = require("../src/server");
 
 let server, base, tmpDir;
 
-const post = (body) =>
+const post = (body, headers = {}) =>
   fetch(base + "/v1/chat/completions", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify(body)
   });
 
@@ -97,4 +97,50 @@ test("routing: trivial prompt logs tier small, reasoning prompt logs large", asy
     messages: [{ role: "user", content: "Prove step by step and analyse why this algorithm has a race condition and refactor it" }]
   });
   assert.equal(reasoning.headers.get("x-joule-tier"), "large");
+});
+
+test("/api/summary returns filtered aggregates that match the server, plus series/perModel", async () => {
+  store.clear();
+  await post({ model: "auto", messages: [{ role: "user", content: "hi thanks a lot" }] });          // small
+  await post({ model: "auto", messages: [{ role: "user", content: "Prove and analyse step by step this proof and evaluate the trade-offs" }] }); // large
+
+  const all = await (await fetch(base + "/api/summary?range=all")).json();
+  assert.equal(all.totals.requests, 2);
+  assert.equal(all.series.length, 24);
+  assert.equal(all.perModel.reduce((n, m) => n + m.calls, 0), 2);
+  assert.ok(all.window.from && all.window.to, "reports its time window");
+
+  // tier filter must agree with /api/report for the same params
+  const small = await (await fetch(base + "/api/summary?tier=small")).json();
+  assert.equal(small.totals.routedLarge, 0);
+  assert.ok(small.totals.routedSmall >= 1);
+  const csv = await (await fetch(base + "/api/report?tier=small&format=csv")).text();
+  const rows = csv.split("\n").filter(Boolean).length - 1; // minus header
+  assert.equal(rows, small.totals.requests, "filtered export matches filtered summary");
+});
+
+test("a session-tagged run groups into one labelled session with correct totals", async () => {
+  store.clear();
+  const sid = "test-agent-run-1";
+  await post({ model: "auto", messages: [{ role: "user", content: "classify priority: login slow" }] }, { "x-joule-session": sid });
+  await post({ model: "auto", messages: [{ role: "user", content: "summarize this ticket briefly" }] }, { "x-joule-session": sid });
+  await post({ model: "auto", messages: [{ role: "user", content: "Analyse the root cause step by step and evaluate mitigation trade-offs" }] }, { "x-joule-session": sid });
+
+  const sum = await (await fetch(base + "/api/summary?range=all")).json();
+  const sess = sum.sessions.find((s) => s.id === sid);
+  assert.ok(sess, "session present");
+  assert.equal(sess.tagged, true);
+  assert.equal(sess.calls, 3);
+  assert.equal(sess.large, 1);
+  assert.equal(sess.small, 2);
+  assert.ok(sess.carbonG.actual > 0);
+});
+
+test("POST /api/clear truly empties the store", async () => {
+  store.clear();
+  await post({ model: "auto", messages: [{ role: "user", content: "something to log" }] });
+  assert.ok((await (await fetch(base + "/api/stats")).json()).totals.requests >= 1);
+  const cleared = await (await fetch(base + "/api/clear", { method: "POST" })).json();
+  assert.equal(cleared.cleared, true);
+  assert.equal((await (await fetch(base + "/api/stats")).json()).totals.requests, 0);
 });

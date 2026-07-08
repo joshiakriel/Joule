@@ -55,15 +55,22 @@ const buildCompletion = ({ id, created, model, content, promptTokens, completion
   usage: { prompt_tokens: promptTokens, completion_tokens: completionTokens, total_tokens: promptTokens + completionTokens }
 });
 
+// A client may tag a run of calls with an X-Joule-Session header so they group
+// into one "session" in the dashboard. Sanitised so it's safe in CSV/JSON.
+const sessionOf = (req) => {
+  const raw = String(req.get("x-joule-session") || "").replace(/[",\r\n]/g, "").trim();
+  return raw ? raw.slice(0, 64) : null;
+};
+
 // meter + log a request identically for streaming and non-streaming paths.
-function meterAndLog({ started, mode, model, tier, decision, grid, promptTokens, completionTokens }) {
+function meterAndLog({ started, mode, model, tier, decision, grid, promptTokens, completionTokens, session }) {
   const m = compute({ model, tier, promptTokens, completionTokens, gPerKwh: grid.gPerKwh, cached: mode === "cache" });
   store.add({
     ts: new Date().toISOString(), mode, cached: mode === "cache",
     model, tier, signals: decision.signals, confidence: decision.confidence,
     promptTokens, completionTokens, totalTokens: m.totalTokens,
     actual: m.actual, baseline: m.baseline, saved: m.saved,
-    grid, latencyMs: Date.now() - started
+    grid, latencyMs: Date.now() - started, session: session || null
   });
   return m;
 }
@@ -91,7 +98,7 @@ function streamText(res, { id, created, model, content }) {
 // headers here (they're flushed before usage is known) — streamed requests are
 // metered via the store, so they still appear in /api/stats and /api/report.
 // ---------------------------------------------------------------------------
-async function handleStreaming({ res, started, body, userText, decision, tier, model, cacheKey, grid }) {
+async function handleStreaming({ res, started, body, userText, decision, tier, model, cacheKey, grid, session }) {
   const id = "joule-stream-" + started;
   const created = Math.floor(started / 1000);
 
@@ -103,7 +110,7 @@ async function handleStreaming({ res, started, body, userText, decision, tier, m
     streamText(res, { id, created, model, content });
     const promptTokens = cached.usage?.prompt_tokens ?? estTokens(userText);
     const completionTokens = cached.usage?.completion_tokens ?? estTokens(content);
-    meterAndLog({ started, mode: "cache", model, tier, decision, grid, promptTokens, completionTokens });
+    meterAndLog({ started, mode: "cache", model, tier, decision, grid, promptTokens, completionTokens, session });
     return;
   }
 
@@ -115,7 +122,7 @@ async function handleStreaming({ res, started, body, userText, decision, tier, m
     const promptTokens = estTokens(userText);
     const completionTokens = estTokens(answer);
     cacheSet(cacheKey, buildCompletion({ id, created, model, content: answer, promptTokens, completionTokens }));
-    meterAndLog({ started, mode: "dry_run", model, tier, decision, grid, promptTokens, completionTokens });
+    meterAndLog({ started, mode: "dry_run", model, tier, decision, grid, promptTokens, completionTokens, session });
     return;
   }
 
@@ -167,7 +174,7 @@ async function handleStreaming({ res, started, body, userText, decision, tier, m
   const promptTokens = usage?.prompt_tokens ?? estTokens(userText);
   const completionTokens = usage?.completion_tokens ?? estTokens(acc);
   cacheSet(cacheKey, buildCompletion({ id, created, model, content: acc, promptTokens, completionTokens }));
-  meterAndLog({ started, mode: "live", model, tier, decision, grid, promptTokens, completionTokens });
+  meterAndLog({ started, mode: "live", model, tier, decision, grid, promptTokens, completionTokens, session });
 }
 
 // ---------------------------------------------------------------------------
@@ -179,6 +186,7 @@ app.post("/v1/chat/completions", async (req, res) => {
     const body = req.body || {};
     const messages = body.messages || [];
     const userText = lastUserText(messages);
+    const session = sessionOf(req);
 
     // 1) classify + route
     const decision = classify(userText);
@@ -192,7 +200,7 @@ app.post("/v1/chat/completions", async (req, res) => {
 
     // streaming branch — SSE out, metered via the store (not response headers)
     if (body.stream === true) {
-      return await handleStreaming({ res, started, body, userText, decision, tier, model, cacheKey, grid });
+      return await handleStreaming({ res, started, body, userText, decision, tier, model, cacheKey, grid, session });
     }
 
     const cachedCompletion = cacheGet(cacheKey);
@@ -237,7 +245,7 @@ app.post("/v1/chat/completions", async (req, res) => {
     if (mode !== "cache") cacheSet(cacheKey, completion);
 
     // 3) meter + 4) log (shared with the streaming path)
-    const m = meterAndLog({ started, mode, model, tier, decision, grid, promptTokens, completionTokens });
+    const m = meterAndLog({ started, mode, model, tier, decision, grid, promptTokens, completionTokens, session });
 
     // 5) expose metrics on headers (drop-in clients still get a clean OpenAI body)
     res.set({
@@ -274,6 +282,29 @@ app.get("/api/stats", async (_req, res) => {
     totals: store.aggregate(),
     recent: store.recent(25)
   });
+});
+
+// Validate the shared filter query used by /api/summary and /api/report.
+function parseFilter(q) {
+  return {
+    range: ["1h", "24h", "7d", "all"].includes(q.range) ? q.range : "all",
+    tier: ["small", "large"].includes(q.tier) ? q.tier : null,
+    mode: ["live", "dry_run", "cache"].includes(q.mode) ? q.mode : null,
+    q: typeof q.q === "string" ? q.q.slice(0, 64) : ""
+  };
+}
+
+// Server-computed aggregates + time-series + per-model + sessions, all from the
+// real log and filtered by range/tier/mode/model — the dashboard renders this so
+// UI and server always agree. /v1/chat/completions behaviour is unchanged.
+app.get("/api/summary", (req, res) => {
+  res.json(store.summary(parseFilter(req.query)));
+});
+
+// Truly clear the request log (in memory + on disk). Destructive by design.
+app.post("/api/clear", (_req, res) => {
+  const removed = store.clear();
+  res.json({ cleared: true, removed });
 });
 
 // ---- runtime configuration (masked; secret-free) ----------------------------
@@ -354,19 +385,22 @@ app.post("/api/config", (req, res) => {
   res.json(maskedConfig());
 });
 
-// ---- audit-style report (JSON or CSV) ----
+// ---- audit-style report (JSON or CSV) — respects the active filters ----
 app.get("/api/report", (req, res) => {
-  const totals = store.aggregate();
-  const all = store.all();
+  const filter = parseFilter(req.query);
+  const pred = store.predicateFor(filter);
+  const rows = store.all().filter(pred);
+  const totals = store.aggregate(pred);
   const period = {
-    from: all[0]?.ts || null,
-    to: all[all.length - 1]?.ts || null,
-    requests: all.length
+    from: rows[0]?.ts || null,
+    to: rows[rows.length - 1]?.ts || null,
+    requests: rows.length,
+    filter
   };
   if (req.query.format === "csv") {
     res.set("content-type", "text/csv");
     res.set("content-disposition", 'attachment; filename="joule-report.csv"');
-    return res.send(store.toCsv());
+    return res.send(store.toCsv(pred));
   }
   res.set("content-disposition", 'attachment; filename="joule-report.json"');
   res.json({

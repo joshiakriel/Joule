@@ -113,6 +113,35 @@
   .cfg-toggles{display:flex;gap:22px;margin:15px 0 4px;flex-wrap:wrap}
   .tog{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text);cursor:pointer}
   .tog input{width:16px;height:16px;accent-color:var(--cyan);cursor:pointer}
+  /* filter toolbar */
+  .toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:16px}
+  .seg{display:inline-flex;border:1px solid var(--line2);border-radius:9px;overflow:hidden}
+  .seg button{font-family:'JetBrains Mono',monospace;font-size:11.5px;background:none;color:var(--muted);border:0;border-right:1px solid var(--line);padding:7px 12px;cursor:pointer;transition:.15s}
+  .seg button:last-child{border-right:0}
+  .seg button:hover{color:var(--text)}
+  .seg button.on{background:var(--cyan-dim);color:var(--cyan)}
+  .toolbar select,.toolbar input[type=text]{width:auto;font-size:12px;padding:7px 10px}
+  .toolbar .tb-search{min-width:150px}
+  .tb-spacer{flex:1}
+  .tb-count{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted)}
+  .tb-danger{font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:12.5px;background:none;color:var(--amber);border:1px solid rgba(255,178,51,.35);border-radius:9px;padding:7px 12px;cursor:pointer}
+  .tb-danger:hover{background:var(--amber-dim)}
+  /* time-series chart */
+  .chart{display:flex;align-items:flex-end;gap:3px;height:88px;margin-top:4px}
+  .chart .bar{position:relative;flex:1;height:100%;min-width:3px}
+  .chart .b{position:absolute;bottom:0;left:0;right:0;border-radius:3px 3px 0 0}
+  .chart .b.base{background:linear-gradient(180deg,var(--amber),#7a5510);opacity:.45}
+  .chart .b.act{background:linear-gradient(180deg,var(--cyan),#0e6c5e)}
+  .chart-x{display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:9.5px;color:var(--muted);margin-top:8px}
+  .chart-lgnd{display:flex;gap:14px;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted);margin-bottom:2px}
+  .chart-lgnd i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:middle}
+  .chart-lgnd i.a{background:var(--cyan)}.chart-lgnd i.b{background:var(--amber);opacity:.6}
+  /* session + breakdown tables */
+  .sess-badge{font-family:'JetBrains Mono',monospace;font-size:9px;padding:2px 6px;border-radius:5px;margin-left:7px;border:1px solid transparent;vertical-align:middle}
+  .sess-badge.agent{color:var(--cyan);background:var(--cyan-dim);border-color:rgba(51,227,199,.3)}
+  .sess-badge.adhoc{color:var(--muted);border-color:var(--line)}
+  td.num,th.num{text-align:right;font-family:'JetBrains Mono',monospace}
+  .tbl-scroll{overflow-x:auto}
 </style>
 </head>
 <body>
@@ -144,6 +173,21 @@
     </div>
   </div>
 
+  <div class="toolbar" id="toolbar">
+    <div class="seg" id="rangeSeg">
+      <button data-range="1h">1h</button>
+      <button data-range="24h">24h</button>
+      <button data-range="7d">7d</button>
+      <button data-range="all" class="on">All</button>
+    </div>
+    <select id="fTier"><option value="">tier · all</option><option value="small">small</option><option value="large">large</option></select>
+    <select id="fMode"><option value="">mode · all</option><option value="live">live</option><option value="dry_run">dry-run</option><option value="cache">cache</option></select>
+    <input class="tb-search" type="text" id="fSearch" placeholder="search model…" autocomplete="off">
+    <span class="tb-spacer"></span>
+    <span class="tb-count" id="fCount"></span>
+    <button class="tb-danger" id="clearBtn">Clear data</button>
+  </div>
+
   <div class="grid">
     <div class="card">
       <h2>01 · Send a test prompt</h2>
@@ -158,7 +202,7 @@
     </div>
 
     <div class="card">
-      <h2>02 · This session vs. "always large model"</h2>
+      <h2 id="ovH2">02 · Selected activity vs. "always large model"</h2>
       <div class="meter-row">
         <div class="meter-lbl"><span>Baseline energy</span><span class="v" id="baseWh">0 Wh</span></div>
         <div class="meter base"><div class="fill" id="baseFill"></div></div>
@@ -174,6 +218,23 @@
         <div class="kpi"><div class="n cyan" id="kCo2">0 g</div><div class="l">CO₂ avoided</div><div class="s" id="kGrid">grid —</div></div>
       </div>
     </div>
+  </div>
+
+  <div class="card" style="margin-top:18px">
+    <h2>Activity over time — energy metered vs. always-large baseline</h2>
+    <div class="chart-lgnd"><span><i class="a"></i>Joule (actual)</span><span><i class="b"></i>always-large baseline</span></div>
+    <div class="chart" id="chart"></div>
+    <div class="chart-x"><span id="chartFrom">—</span><span id="chartTo">now</span></div>
+  </div>
+
+  <div class="card logwrap">
+    <h2>Sessions / runs <span class="muted" style="text-transform:none;letter-spacing:0">— an agent run = one session</span></h2>
+    <div id="sessBox"><div class="empty-log">No sessions yet.</div></div>
+  </div>
+
+  <div class="card logwrap">
+    <h2>Per-model &amp; per-tier breakdown</h2>
+    <div id="modelBox"><div class="empty-log">No requests yet.</div></div>
   </div>
 
   <div class="card" id="cfgCard" style="margin-top:18px">
@@ -277,11 +338,37 @@ async function send() {
   } finally { btn.disabled = false; btn.textContent = "Route & meter"; }
 }
 
-async function refresh() {
-  let s; try { s = await (await fetch("/api/stats")).json(); } catch { return; }
-  const t = s.totals, g = s.grid, c = s.config;
+// ---- filter state (drives /api/summary + filtered exports) ----
+const filter = { range: "all", tier: "", mode: "", q: "" };
+function qs() {
+  const p = new URLSearchParams();
+  p.set("range", filter.range);
+  if (filter.tier) p.set("tier", filter.tier);
+  if (filter.mode) p.set("mode", filter.mode);
+  if (filter.q) p.set("q", filter.q);
+  return p.toString();
+}
+function relTime(ts) {
+  const s = Math.max(0, (Date.now() - new Date(ts).getTime()) / 1000);
+  if (s < 60) return Math.max(1, Math.round(s)) + "s ago";
+  if (s < 3600) return Math.round(s / 60) + "m ago";
+  if (s < 86400) return Math.round(s / 3600) + "h ago";
+  return Math.round(s / 86400) + "d ago";
+}
+const fmtMs = (ms) => ms >= 1000 ? (ms/1000).toFixed(1)+"s" : Math.round(ms)+"ms";
+const clockHM = (ts) => new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-  // status pills
+async function refresh() {
+  let meta, view;
+  try {
+    [meta, view] = await Promise.all([
+      fetch("/api/stats").then(r => r.json()),
+      fetch("/api/summary?" + qs()).then(r => r.json())
+    ]);
+  } catch { return; }
+  const g = meta.grid, c = meta.config, t = view.totals;
+
+  // status pills (global instance state — not filtered)
   const pills = [];
   pills.push(`<span class="pill ${c.dryRun ? "warn" : "ok"}"><span class="d"></span>${c.dryRun ? "DRY-RUN" : "LIVE"}</span>`);
   pills.push(`<span class="pill ${c.hasUpstreamKey ? "ok" : "warn"}"><span class="d"></span>${c.hasUpstreamKey ? "API key set" : "no API key"}</span>`);
@@ -289,6 +376,8 @@ async function refresh() {
   pills.push(`<span class="pill"><span class="d"></span>${c.routingEnabled ? "routing on" : "routing off"}</span>`);
   $("status").innerHTML = pills.join("");
 
+  // filtered KPIs + meters
+  $("fCount").textContent = t.requests + " request" + (t.requests===1?"":"s") + " in view";
   $("baseWh").textContent = fmtWh(t.energyWh.baseline);
   $("routeWh").textContent = fmtWh(t.energyWh.actual);
   const max = Math.max(t.energyWh.baseline, 0.0001);
@@ -302,25 +391,97 @@ async function refresh() {
   $("kCo2").textContent = fmtG(t.carbonG.saved);
   $("kGrid").textContent = "grid " + Math.round(g.gPerKwh) + " gCO₂/kWh";
 
-  const box = $("logbox");
-  if (!s.recent.length) { box.innerHTML = '<div class="empty-log">No requests yet.</div>'; }
-  else {
-    box.innerHTML = '<table><thead><tr><th>Time</th><th>Prompt tier</th><th>Model</th><th>Tokens</th><th>Cost</th><th>Energy</th><th>CO₂</th><th>Saved</th></tr></thead><tbody>'+
-      s.recent.map(r => {
-        const time = new Date(r.ts).toLocaleTimeString();
-        return '<tr><td class="mono muted">'+time+'</td>'+
-          '<td><span class="dot '+r.tier+'"></span>'+r.tier+(r.cached?' · cache':'')+'</td>'+
-          '<td class="mono">'+esc(r.model)+'</td>'+
-          '<td class="mono">'+r.totalTokens+'</td>'+
-          '<td class="mono">'+fmtUsd(r.actual.costUsd)+'</td>'+
-          '<td class="mono">'+fmtWh(r.actual.energyWh)+'</td>'+
-          '<td class="mono">'+fmtG(r.actual.carbonG)+'</td>'+
-          '<td class="mono cyan">'+fmtUsd(r.saved.costUsd)+'</td></tr>';
-      }).join("")+'</tbody></table>';
-  }
+  renderChart(view.series, view.window);
+  renderSessions(view.sessions);
+  renderModels(view.perModel);
+  renderLog(view.recent);
+
+  // exports carry the active filter so you download exactly what you see
+  $("dljson").href = "/api/report?format=json&" + qs();
+  $("dlcsv").href = "/api/report?format=csv&" + qs();
+
   $("foot").innerHTML = "grid source: "+esc(g.source)+
     " &nbsp;·&nbsp; cost exact from token usage · energy estimated (IEA/Epoch, configurable) · carbon = energy × grid intensity (GHG Scope 2) · SCI / ISO-IEC 21031 aligned";
 }
+
+function renderChart(series, win) {
+  const maxE = Math.max(...series.map(b => b.energyBaseline), 1e-9);
+  $("chart").innerHTML = series.map(b => {
+    const bh = b.energyBaseline / maxE * 100, ah = b.energyActual / maxE * 100;
+    const tip = new Date(b.t).toLocaleTimeString() + ` — ${b.calls} call${b.calls===1?"":"s"}, ${fmtWh(b.energyActual)} vs ${fmtWh(b.energyBaseline)} baseline`;
+    return `<div class="bar" title="${esc(tip)}"><div class="b base" style="height:${bh}%"></div><div class="b act" style="height:${ah}%"></div></div>`;
+  }).join("");
+  if (win) { $("chartFrom").textContent = clockHM(win.from); $("chartTo").textContent = clockHM(win.to); }
+}
+
+function renderLog(recent) {
+  const box = $("logbox");
+  if (!recent.length) { box.innerHTML = '<div class="empty-log">No requests match this filter.</div>'; return; }
+  box.innerHTML = '<div class="tbl-scroll"><table><thead><tr><th>When</th><th>Tier</th><th>Model</th><th>Session</th><th class="num">Tokens</th><th class="num">Cost</th><th class="num">Energy</th><th class="num">CO₂</th><th class="num">Saved</th></tr></thead><tbody>'+
+    recent.map(r =>
+      '<tr><td class="mono muted" title="'+esc(new Date(r.ts).toLocaleString())+'">'+relTime(r.ts)+'</td>'+
+      '<td><span class="dot '+r.tier+'"></span>'+r.tier+(r.cached?' · cache':'')+'</td>'+
+      '<td class="mono">'+esc(r.model)+'</td>'+
+      '<td class="mono muted">'+(r.session?esc(r.session):'—')+'</td>'+
+      '<td class="num">'+r.totalTokens+'</td>'+
+      '<td class="num">'+fmtUsd(r.actual.costUsd)+'</td>'+
+      '<td class="num">'+fmtWh(r.actual.energyWh)+'</td>'+
+      '<td class="num">'+fmtG(r.actual.carbonG)+'</td>'+
+      '<td class="num cyan">'+fmtUsd(r.saved.costUsd)+'</td></tr>'
+    ).join("")+'</tbody></table></div>';
+}
+
+function renderSessions(sessions) {
+  const box = $("sessBox");
+  if (!sessions.length) { box.innerHTML = '<div class="empty-log">No sessions yet.</div>'; return; }
+  box.innerHTML = '<div class="tbl-scroll"><table><thead><tr><th>Session</th><th class="num">Calls</th><th class="num">S/L</th><th class="num">Tokens</th><th class="num">Energy</th><th class="num">CO₂</th><th class="num">Saved CO₂</th><th class="num">Saved%</th><th class="num">Duration</th><th>When</th></tr></thead><tbody>'+
+    sessions.map(s => {
+      const badge = s.tagged ? '<span class="sess-badge agent">agent</span>' : '<span class="sess-badge adhoc">ad-hoc</span>';
+      const label = s.tagged ? esc(s.label) : 'ad-hoc activity';
+      return '<tr><td class="mono">'+label+badge+'</td>'+
+        '<td class="num">'+s.calls+'</td>'+
+        '<td class="num muted">'+s.small+'/'+s.large+'</td>'+
+        '<td class="num">'+s.tokens+'</td>'+
+        '<td class="num">'+fmtWh(s.energyWh.actual)+'</td>'+
+        '<td class="num">'+fmtG(s.carbonG.actual)+'</td>'+
+        '<td class="num cyan">'+fmtG(s.carbonG.saved)+'</td>'+
+        '<td class="num cyan">'+(s.savedPct||0)+'%</td>'+
+        '<td class="num muted">'+fmtMs(s.durationMs)+'</td>'+
+        '<td class="mono muted" title="'+esc(new Date(s.to).toLocaleString())+'">'+relTime(s.to)+'</td></tr>';
+    }).join("")+'</tbody></table></div>';
+}
+
+function renderModels(perModel) {
+  const box = $("modelBox");
+  if (!perModel.length) { box.innerHTML = '<div class="empty-log">No requests match this filter.</div>'; return; }
+  box.innerHTML = '<div class="tbl-scroll"><table><thead><tr><th>Model</th><th>Tier</th><th class="num">Calls</th><th class="num">Tokens</th><th class="num">Cost</th><th class="num">Energy</th><th class="num">CO₂</th><th class="num">Avg latency</th></tr></thead><tbody>'+
+    perModel.map(m =>
+      '<tr><td class="mono">'+esc(m.model)+'</td>'+
+      '<td><span class="dot '+m.tier+'"></span>'+m.tier+'</td>'+
+      '<td class="num">'+m.calls+'</td>'+
+      '<td class="num">'+m.tokens+'</td>'+
+      '<td class="num">'+fmtUsd(m.cost)+'</td>'+
+      '<td class="num">'+fmtWh(m.energyWh)+'</td>'+
+      '<td class="num">'+fmtG(m.carbonG)+'</td>'+
+      '<td class="num muted">'+(m.avgLatencyMs!=null?fmtMs(m.avgLatencyMs):'—')+'</td></tr>'
+    ).join("")+'</tbody></table></div>';
+}
+
+// ---- filter toolbar wiring ----
+document.querySelectorAll("#rangeSeg button").forEach(b => b.onclick = () => {
+  filter.range = b.dataset.range;
+  document.querySelectorAll("#rangeSeg button").forEach(x => x.classList.toggle("on", x === b));
+  refresh();
+});
+$("fTier").onchange = () => { filter.tier = $("fTier").value; refresh(); };
+$("fMode").onchange = () => { filter.mode = $("fMode").value; refresh(); };
+let searchTimer;
+$("fSearch").oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { filter.q = $("fSearch").value.trim(); refresh(); }, 250); };
+$("clearBtn").onclick = async () => {
+  if (!confirm("Clear ALL logged request data on this instance? This cannot be undone.")) return;
+  try { const r = await fetch("/api/clear", { method: "POST" }); const j = await r.json(); } catch {}
+  refresh();
+};
 
 // ---- integration snippet (how a client points at Joule) ----
 const origin = window.location.origin;

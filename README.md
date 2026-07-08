@@ -59,6 +59,43 @@ curl http://localhost:3000/v1/chat/completions \
 
 **Streaming** works too — set `"stream": true` for an OpenAI-style SSE stream (`client.chat.completions.create({..., stream:true})`, or `curl -N ... -d '{"model":"auto","stream":true,"messages":[...]}'`). Streamed requests are still routed, metered, and logged (they show up in `/api/stats` and `/api/report`), but the `x-joule-*` metrics headers aren't set — headers flush before token usage is known.
 
+## Metering agents & automated workloads
+
+Joule sits **on the API call**, so it meters *any* LLM request identically — whether a human
+typed it or a script/agent generated it. **Automated pipelines and agents are the highest-value
+case**: unattended, they fire many chained calls per task and the spend (and carbon) balloons
+where nobody is watching. Point the agent's OpenAI `baseURL` at Joule and its entire autonomous
+workload is metered and routed — no per-call instrumentation:
+
+```js
+import OpenAI from "openai";
+// one-line swap — the agent's own code is unchanged
+const client = new OpenAI({ baseURL: "http://localhost:3000/v1", apiKey: process.env.KEY });
+
+for (const ticket of ticketQueue) {                 // no human in the loop
+  const priority = await client.chat.completions.create({ model: "auto",
+    messages: [{ role: "user", content: `Classify priority: ${ticket.subject}` }] });   // → small
+  const summary  = await client.chat.completions.create({ model: "auto",
+    messages: [{ role: "user", content: `Summarize: ${ticket.subject}` }] });            // → small
+  if (isHigh(priority)) await client.chat.completions.create({ model: "auto",
+    messages: [{ role: "user", content: `Root-cause analysis: ${ticket.body}` }] });     // → large
+}
+// every call above is routed, metered, and logged — visible in /api/stats and /api/report
+```
+
+Run the included example against a local (DRY_RUN) server — a support-triage agent that makes
+~20 autonomous, chained calls with mixed routing, then prints a cost/energy/carbon summary:
+
+```bash
+npm start                 # in one terminal
+npm run example:agent     # in another (or: node examples/agent-workload.js <baseUrl>)
+```
+
+> **Scope (be precise).** Joule meters **LLM / generative-AI inference calls** — anything that
+> hits an OpenAI-compatible `/chat/completions` endpoint. It does **not** capture non-LLM
+> operational ML (e.g. forecasting/recommendation/optimization models that never call an LLM
+> API). Those need separate instrumentation; Joule's boundary is the LLM API call.
+
 ## Configure in the UI
 
 The dashboard's **"Configure your instance"** panel lets you set the provider API key,
@@ -73,13 +110,35 @@ keep working). `POST /api/config` accepts the same fields programmatically.
 > convenience**: the overrides are one shared in-memory bag with no auth. Multi-tenant
 > production needs authentication and encrypted per-user secret storage.
 
+## Dashboard: filter, sessions & breakdowns
+
+The live console works entirely off the **real request log** — nothing is mocked:
+
+- **Time-range + filters** — scope everything (KPIs, chart, tables, log) to `Last hour / 24h / 7d / All`, by tier (small/large), mode (live/dry_run/cache), and a model search. The dashboard renders `GET /api/summary`, so the UI and server always agree.
+- **Activity chart** — bucketed energy metered vs. the always-large baseline over the selected window.
+- **Sessions / runs** — requests group into runs. A client can tag a run with an `X-Joule-Session` header (an agent run then shows as **one labelled session**: "N calls, X g CO₂, Y% avoided"); untagged calls bucket by time gap.
+- **Per-model / per-tier breakdown** — calls, tokens, cost, energy, carbon, avg latency for every model actually used.
+- **Filtered export** — `GET /api/report` accepts the same `range/tier/mode/q` params, so you export exactly what you're viewing (methodology block preserved).
+- **Clear session data** — `POST /api/clear` truly empties the store (the dashboard button confirms first).
+
+Tag an agent run from your client:
+
+```js
+await client.chat.completions.create(
+  { model: "auto", messages },
+  { headers: { "X-Joule-Session": "nightly-etl-2026-07-08" } }
+);
+```
+
 ## Endpoints
 
 | Route | Purpose |
 |---|---|
-| `POST /v1/chat/completions` | OpenAI-compatible proxy (routes + meters) |
-| `GET /api/stats` | Live totals + recent log (the dashboard uses this) |
-| `GET /api/report?format=json\|csv` | Downloadable audit-style cost & emissions report |
+| `POST /v1/chat/completions` | OpenAI-compatible proxy (routes + meters). Optional `X-Joule-Session` header groups a run. |
+| `GET /api/stats` | Instance config, grid + all-time totals (dashboard pills) |
+| `GET /api/summary?range=&tier=&mode=&q=` | Filtered aggregates + time-series + per-model + sessions, all from the real log |
+| `GET /api/report?format=json\|csv&range=&tier=&mode=&q=` | Downloadable audit-style report — honours the same filters |
+| `POST /api/clear` | Truly clears the request log (in memory + on disk) |
 | `GET · POST /api/config` | Masked runtime config — read effective settings / apply overrides (secret-free) |
 | `GET /api/health` | Health check |
 | `GET /` | Live console (dashboard) |

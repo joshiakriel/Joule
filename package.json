@@ -8,7 +8,8 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "test": "node --test",
-    "demo": "node scripts/demo.js"
+    "demo": "node scripts/demo.js",
+    "example:agent": "node examples/agent-workload.js"
   },
   "engines": { "node": ">=18" },
   "dependencies": {

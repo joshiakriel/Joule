@@ -16,6 +16,10 @@ request (cost/energy/carbon), routes simple prompts to a smaller model, and expo
 audit-style report. Single founder (Joshia Kriel). Non-coding/business work happens
 elsewhere — this repo is code only.
 
+**Primary target: automated / agent workloads** (script-driven, unattended pipelines), not
+human-typed prompts — that's where LLM cost and carbon run away. Joule meters on the API call,
+so it captures any client identically; `examples/agent-workload.js` demonstrates this.
+
 ## Status — verified working (2026-07-03)
 Built and smoke-tested end-to-end in `DRY_RUN` mode:
 - 6 mixed prompts → **4 routed small / 2 large** (classifier correct), **1 cache hit**.
@@ -41,18 +45,21 @@ single shell invocation to avoid orphaned background servers.
 - `router.js`  — `classify(text)` heuristic (regex signals + length) → `{tier, score, signals, confidence}`; `selectModel`, `tierForModel`.
 - `carbon.js`  — `getIntensity()` → live Electricity Maps gCO₂/kWh with 10-min cache and labelled fallback.
 - `metrics.js` — `compute({...})` → `{actual, baseline, saved, totalTokens}`. Cost exact; energy estimated; carbon = energy×intensity.
-- `store.js`   — append-only JSONL log (`data/log.jsonl`) + in-memory mirror; `aggregate()`, `recent()`, `toCsv()`.
-- `server.js`  — Express: `POST /v1/chat/completions` (routes+meters+logs; streams SSE when `stream:true` via `handleStreaming`), `GET /api/stats|report|health`, `GET`+`POST /api/config` (masked runtime config), serves `public/`. `scrub()` strips secrets from error messages.
-- `public/index.html` — live dashboard (vanilla JS): architecture strip (client → Joule → provider) + copy-ready `/v1` baseURL snippet, "Configure your instance" panel (`GET`/`POST /api/config`, masked secrets + per-field source), test box, meters, KPIs, live log. Polls `/api/stats`.
-- `test/` — `node:test` suite (`router`, `metrics`, `store`, `integration`, `config`). Runs offline in DRY_RUN via `npm test`; integration mounts `app` on an ephemeral port and points `store.init(tmpDir)` at a temp data dir. Testability hooks: `server.js` exports `app` and only auto-listens when run directly; `store.init(dir)` accepts an optional data dir (default unchanged).
+- `store.js`   — append-only JSONL log (`data/log.jsonl`) + in-memory mirror, and the ONE shared filter/aggregation implementation used by the server and tests. `predicateFor({range,tier,mode,q},now)` builds a record predicate; `aggregate(pred)`, `perModel(pred)`, `series(pred,{from,to,buckets})`, `sessions(pred)`, `toCsv(pred)` all take that predicate. `summary(filter,now)` bundles totals+series+perModel+sessions+recent. `clear()` truly empties (memory + disk). Sessions group by the record's `session` (from `X-Joule-Session`), else 15-min time-gap buckets.
+- `server.js`  — Express: `POST /v1/chat/completions` (routes+meters+logs; reads optional `X-Joule-Session`; streams SSE when `stream:true` via `handleStreaming`), `GET /api/stats`, `GET /api/summary` (filtered aggregates+series+perModel+sessions), `GET /api/report` (honours filters), `POST /api/clear`, `GET`+`POST /api/config` (masked runtime config), `GET /api/health`, serves `public/`. `parseFilter()` validates the shared `range/tier/mode/q` query; `scrub()` strips secrets from error messages.
+- `public/index.html` — live dashboard (vanilla JS): architecture strip + copy-ready `/v1` snippet, filter toolbar (range/tier/mode/model-search + clear-data), overview KPIs/meters, activity time-series chart, sessions table, per-model breakdown, filtered log with relative timestamps, "Configure your instance" panel. Renders `/api/summary` (filtered) + `/api/stats` (pills); exports carry the active filter.
+- `test/` — `node:test` suite (`router`, `metrics`, `store`, `integration`, `config`). Runs offline in DRY_RUN via `npm test`. `store` tests cover the filter/aggregate/perModel/series/sessions/clear logic; `integration` covers `/api/summary`, session grouping, filtered export, and `/api/clear`. Integration mounts `app` on an ephemeral port and uses `store.init(tmpDir)`/`store.clear()` for isolation. Testability hooks: `server.js` exports `app` and only auto-listens when run directly; `store.init(dir)` accepts an optional data dir (default unchanged).
 - `scripts/demo.js` — dependency-free seed script (`npm run demo`); fires ~30 varied prompts (trivial/format/reason/code + repeats for cache) at `argv[2]`/`DEMO_TARGET` (default localhost) via global `fetch`, prints a small/large/cached summary. Deploy tooling: `render.yaml` (Blueprint), `Dockerfile` + `.dockerignore`, `.node-version` (22).
+- `examples/agent-workload.js` — dependency-free (`npm run example:agent`); simulates an unattended support-triage agent that makes ~20 autonomous chained calls (classify→small, summarize→small, high-priority deep analysis→large) through Joule's `/v1`, then prints a screenshot-ready cost/energy/carbon summary computed as before/after `/api/stats` deltas (so it matches the server). Tags every call with an `X-Joule-Session` header so the whole run shows up as one labelled session, and prints that session line back from `/api/summary`. Proves Joule meters scripted/agent traffic, not just the dashboard's test box.
 
 ## Data contracts (do not break silently)
 - **Proxy request/response**: OpenAI Chat Completions shape. Clients set only `baseURL=…/v1`.
 - **Metrics on response headers**: `x-joule-mode|tier|model|cost-usd|energy-wh|co2-g|saved-usd|saved-co2-g`.
 - **Log record**: `{ts, mode('live'|'dry_run'|'cache'), cached, model, tier, signals, confidence,
-  promptTokens, completionTokens, totalTokens, actual{costUsd,energyWh,carbonG}, baseline{…}, saved{…}, grid{gPerKwh,zone,source,live}, latencyMs}`.
-- **/api/stats**: `{config, grid, totals{requests,cacheHits,routedSmall,routedLarge,tokens,cost,energyWh,carbonG,savedPct}, recent[]}`.
+  promptTokens, completionTokens, totalTokens, actual{costUsd,energyWh,carbonG}, baseline{…}, saved{…}, grid{gPerKwh,zone,source,live}, latencyMs, session(string|null)}`.
+- **/api/stats**: `{config, grid, totals{requests,cacheHits,routedSmall,routedLarge,tokens,cost,energyWh,carbonG,savedPct}, recent[]}` (all-time; drives the pills).
+- **GET /api/summary?range=&tier=&mode=&q=**: `{filter, window{from,to}, totals(same shape as stats.totals), series[{t,calls,energyActual,energyBaseline,carbonActual,costActual}], perModel[{model,tier,calls,tokens,cost,energyWh,carbonG,avgLatencyMs}], sessions[{id,label,tagged,from,to,durationMs,calls,small,large,cached,tokens,cost,energyWh,carbonG,savedPct}], recent[]}` — all filtered, all from the real log. Filters: `range∈{1h,24h,7d,all}`, `tier∈{small,large}`, `mode∈{live,dry_run,cache}`, `q`=model substring.
+- **GET /api/report** accepts the same filters (JSON+CSV; CSV gains a trailing `session` column). **POST /api/clear** → `{cleared,removed}` (destructive).
 - **GET /api/config** (masked, secret-free): `{dryRun, routingEnabled, modelSmall, modelLarge, upstreamBaseUrl, gridZone, hasUpstreamKey, upstreamKeyLast4, hasEmToken, sources{field→"env"|"runtime"|"default"}}`. Never returns raw secrets.
 - **POST /api/config**: JSON partial, whitelist ONLY `{upstreamApiKey, upstreamBaseUrl, modelSmall, modelLarge, emToken, gridZone, routingEnabled, dryRun}`; unknown fields → 400; validates `gridZone` (short alnum/hyphen) + `upstreamBaseUrl` (http/https); applies in-memory overrides; invalidates carbon cache when `gridZone`/`emToken` change; returns the masked view.
 
@@ -82,12 +89,14 @@ single shell invocation to avoid orphaned background servers.
 - **Runtime key entry via `/api/config` is a SINGLE-TENANT demo convenience.** Overrides live in one shared in-memory bag with no auth — anyone who can reach the instance can set them. Multi-tenant production needs auth + encrypted per-user secret storage (not in-memory globals).
 - **Energy factors are per-tier**, not per-model or measured.
 - Only `/chat/completions` is proxied (no `/models`, `/embeddings`, etc.).
+- **LLM-only scope.** Joule meters LLM / generative-AI inference calls (OpenAI-compatible `/chat/completions`). It does NOT capture non-LLM operational ML (forecasting/recommendation/optimization models that never hit an LLM API) — that boundary is the API call. Keep this accurate in positioning.
 
 ## Next steps (prioritized feature checklist)
 - [x] **Streaming (SSE) passthrough** while still metering from `usage` (or estimating on stream end). Live mode adds `stream_options:{include_usage:true}` and pipes chunks unmodified; dry-run synthesizes an SSE stream. Metrics land in the store (not `x-joule-*` headers) — see Known limitations.
 - [x] **Unit + integration tests** (router, metrics, store, proxy) — `node --test` in `test/`, all offline in DRY_RUN. Run with `npm test`.
 - [x] **Deploy-prep** — `render.yaml` Blueprint (free tier, boots in DRY_RUN so the URL is instantly live), `Dockerfile` (`node:22-slim`) for other hosts, `.node-version` (22), and `scripts/demo.js` (`npm run demo`) to seed the dashboard for a screenshot. See README "Deploy to Render"; ephemeral-disk + spin-down caveats in Known limitations.
 - [x] **UI polish + runtime config** — dashboard reads as an intermediary (architecture strip + copy-ready `/v1` snippet) and is configurable from the UI (keys/models/grid region via `GET`/`POST /api/config`, masked secrets, per-field source). In-memory override layer keeps env as the fallback. Single-tenant demo convenience (see Known limitations).
+- [x] **Dashboard analytics on the real log** — `/api/summary` powers time-range + tier/mode/model filters, a bucketed activity chart, per-model/per-tier breakdown, and **sessions** (an `X-Joule-Session`-tagged agent run = one labelled session; else time-gap buckets). Filtered CSV/JSON export, relative timestamps, snippet copy, and a real "clear data" (`POST /api/clear`). All from real records; agent example sends the session header.
 - [ ] **Real classifier** (small fine-tuned / embedding model) + a labelled eval set; keep the interface.
 - [ ] **Semantic cache** (embeddings) replacing normalized-exact.
 - [ ] **Persistent store** (Postgres) behind `store.js`; keep JSONL for local dev.
