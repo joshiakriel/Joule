@@ -98,6 +98,7 @@
   .arch-ar{display:flex;align-items:center;color:var(--muted);font-size:18px}
   .arch-grid{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--muted);margin-top:9px;display:flex;align-items:center;gap:7px}
   .arch-grid .gdot{width:7px;height:7px;border-radius:50%;background:var(--amber);box-shadow:0 0 8px var(--amber);flex:none}
+  .arch-grid.live .gdot{background:var(--cyan);box-shadow:0 0 8px var(--cyan)}
   .snip{margin-top:12px;background:var(--ink);border:1px solid var(--line);border-radius:10px;overflow:hidden}
   .snip-h{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line);font-size:11px;color:var(--muted)}
   .snip pre{margin:0;padding:11px 12px;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--text);white-space:pre;overflow:auto}
@@ -164,9 +165,9 @@
         <div class="an-tags"><span>classify</span><span>route</span><span>meter</span><span>report</span></div>
       </div>
       <div class="arch-ar">→</div>
-      <div class="arch-node prov"><div class="an-t">Model provider</div><div class="an-s" id="archProv">api.openai.com</div></div>
+      <div class="arch-node prov"><div class="an-t">Model provider</div><div class="an-s" id="archProv">model provider</div></div>
     </div>
-    <div class="arch-grid"><span class="gdot"></span> live grid carbon (Electricity Maps) feeds Joule's metering — cost · energy · CO₂ per request</div>
+    <div class="arch-grid" id="archGridRow"><span class="gdot"></span> <span id="archGridTxt">Grid carbon intensity feeds Joule's metering — cost · energy · CO₂ per request</span></div>
     <div class="snip">
       <div class="snip-h"><span>Point any OpenAI client at Joule — change one line:</span><button class="copy" id="copySnip">Copy</button></div>
       <pre id="snippet"></pre>
@@ -211,7 +212,7 @@
         <div class="meter-lbl"><span>Joule energy</span><span class="v" id="routeWh">0 Wh</span></div>
         <div class="meter routed"><div class="fill" id="routeFill"></div></div>
       </div>
-      <div class="saved"><div class="big" id="pct">0%</div><div class="cap">energy &amp; cost avoided</div></div>
+      <div class="saved"><div class="big" id="pct">0%</div><div class="cap">energy &amp; CO₂ avoided</div></div>
       <div class="kpis">
         <div class="kpi"><div class="n cyan" id="kCost">$0.00</div><div class="l">Cost saved</div><div class="s" id="kReq">0 requests</div></div>
         <div class="kpi"><div class="n cyan" id="kEnergy">0 Wh</div><div class="l">Energy saved</div><div class="s" id="kCache">0 cache hits</div></div>
@@ -357,6 +358,8 @@ function relTime(ts) {
 }
 const fmtMs = (ms) => ms >= 1000 ? (ms/1000).toFixed(1)+"s" : Math.round(ms)+"ms";
 const clockHM = (ts) => new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+// Host of the real upstream provider (e.g. "api.groq.com"), or a generic fallback.
+const providerHost = (url) => { try { return new URL(url).host || "model provider"; } catch { return "model provider"; } };
 
 async function refresh() {
   let meta, view;
@@ -372,9 +375,22 @@ async function refresh() {
   const pills = [];
   pills.push(`<span class="pill ${c.dryRun ? "warn" : "ok"}"><span class="d"></span>${c.dryRun ? "DRY-RUN" : "LIVE"}</span>`);
   pills.push(`<span class="pill ${c.hasUpstreamKey ? "ok" : "warn"}"><span class="d"></span>${c.hasUpstreamKey ? "API key set" : "no API key"}</span>`);
-  pills.push(`<span class="pill ${g.live ? "ok" : "warn"}"><span class="d"></span>${g.zone} ${Math.round(g.gPerKwh)} gCO₂/kWh</span>`);
+  // grid pill — honest about provenance: live EM value vs. estimated fallback constant
+  const gridPill = g.live
+    ? `${g.zone} ${Math.round(g.gPerKwh)} gCO₂/kWh`
+    : `${g.zone} ~${Math.round(g.gPerKwh)} gCO₂/kWh · est`;
+  pills.push(`<span class="pill ${g.live ? "ok" : "warn"}"><span class="d"></span>${gridPill}</span>`);
   pills.push(`<span class="pill"><span class="d"></span>${c.routingEnabled ? "routing on" : "routing off"}</span>`);
   $("status").innerHTML = pills.join("");
+
+  // architecture strip — only say "Live … (Electricity Maps)" when it truly is
+  $("archGridRow").classList.toggle("live", !!g.live);
+  $("archGridTxt").textContent = g.live
+    ? "Live grid carbon (Electricity Maps) feeds Joule's metering — cost · energy · CO₂ per request"
+    : "Grid carbon intensity (estimated fallback) feeds Joule's metering — cost · energy · CO₂ per request";
+
+  // provider label — reflect the real upstream host (Groq, OpenAI, …), not a hardcode
+  $("archProv").textContent = providerHost(c.upstreamBaseUrl);
 
   // filtered KPIs + meters
   $("fCount").textContent = t.requests + " request" + (t.requests===1?"":"s") + " in view";
@@ -389,7 +405,7 @@ async function refresh() {
   $("kEnergy").textContent = fmtWh(t.energyWh.saved);
   $("kCache").textContent = t.cacheHits + " cache hit" + (t.cacheHits===1?"":"s");
   $("kCo2").textContent = fmtG(t.carbonG.saved);
-  $("kGrid").textContent = "grid " + Math.round(g.gPerKwh) + " gCO₂/kWh";
+  $("kGrid").textContent = "grid " + Math.round(g.gPerKwh) + " gCO₂/kWh" + (g.live ? "" : " · est");
 
   renderChart(view.series, view.window);
   renderSessions(view.sessions);
@@ -489,7 +505,7 @@ $("snippet").textContent =
   'import OpenAI from "openai";\n' +
   'const client = new OpenAI({\n' +
   '  baseURL: "' + origin + '/v1",   // ← the only change\n' +
-  '  apiKey: "unused-in-dry-run"\n' +
+  '  apiKey: "any-string"            // Joule holds the real provider key server-side\n' +
   '});';
 $("copySnip").onclick = async () => {
   try { await navigator.clipboard.writeText($("snippet").textContent); const b=$("copySnip"); b.textContent="Copied ✓"; setTimeout(()=>b.textContent="Copy",1500); } catch {}
@@ -505,7 +521,7 @@ let loadedCfg = {};
 async function loadConfig() {
   let c; try { c = await (await fetch("/api/config")).json(); } catch { return; }
   loadedCfg = c;
-  try { $("archProv").textContent = new URL(c.upstreamBaseUrl).host; } catch { $("archProv").textContent = c.upstreamBaseUrl; }
+  $("archProv").textContent = providerHost(c.upstreamBaseUrl);
   $("cfg-upstreamBaseUrl").value = c.upstreamBaseUrl || "";
   $("cfg-modelSmall").value = c.modelSmall || "";
   $("cfg-modelLarge").value = c.modelLarge || "";
