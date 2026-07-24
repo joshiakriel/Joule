@@ -16,22 +16,31 @@ let DATA_DIR = path.join(__dirname, "..", "data");
 let LOG_FILE = path.join(DATA_DIR, "log.jsonl");
 
 let records = [];
+let seq = 0;
 
 // init() with no args uses the default ../data dir (production). Pass an explicit
 // dir to point the store at an isolated location — used by the test suite so runs
 // don't pollute data/log.jsonl. Re-initialising starts from a clean in-memory set.
+// Two kinds of JSONL line: request records, and `{vfor:<id>, verification:{…}}`
+// lines appended later when async verification completes — reconciled on load.
 function init(dir) {
   if (dir) { DATA_DIR = dir; LOG_FILE = path.join(DATA_DIR, "log.jsonl"); }
   records = [];
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     if (fs.existsSync(LOG_FILE)) {
-      records = fs
-        .readFileSync(LOG_FILE, "utf8")
-        .split("\n")
-        .filter(Boolean)
+      const lines = fs.readFileSync(LOG_FILE, "utf8").split("\n").filter(Boolean)
         .map((l) => { try { return JSON.parse(l); } catch { return null; } })
         .filter(Boolean);
+      const byId = new Map();
+      for (const line of lines) {
+        if (line.vfor) continue; // verification line — applied in the second pass
+        records.push(line);
+        if (line.id) byId.set(line.id, line);
+      }
+      for (const line of lines) {
+        if (line.vfor && byId.has(line.vfor)) byId.get(line.vfor).verification = line.verification;
+      }
     }
   } catch (e) {
     console.error("store init error:", e.message);
@@ -39,8 +48,18 @@ function init(dir) {
 }
 
 function add(rec) {
+  if (!rec.id) rec.id = Date.now().toString(36) + "-" + (seq++).toString(36);
   records.push(rec);
   try { fs.appendFileSync(LOG_FILE, JSON.stringify(rec) + "\n"); } catch (e) { /* ignore disk errors in MVP */ }
+  return rec;
+}
+
+// Attach an async verification result to an existing record (in memory + on disk).
+function addVerification(id, verification) {
+  const rec = records.find((r) => r.id === id);
+  if (rec) rec.verification = verification;
+  try { fs.appendFileSync(LOG_FILE, JSON.stringify({ vfor: id, verification }) + "\n"); } catch (e) { /* ignore */ }
+  return Boolean(rec);
 }
 
 function all() { return records; }
@@ -84,8 +103,11 @@ function accumulate(rs) {
     requests: rs.length, cacheHits: 0, routedSmall: 0, routedLarge: 0, tokens: 0,
     cost: { actual: 0, baseline: 0, saved: 0 },
     energyWh: { actual: 0, baseline: 0, saved: 0 },
-    carbonG: { actual: 0, baseline: 0, saved: 0 }
+    carbonG: { actual: 0, baseline: 0, saved: 0 },
+    verified: 0,                                      // records with a verification result
+    verifyCost: { costUsd: 0, energyWh: 0, carbonG: 0, tokens: 0 }
   };
+  let qSum = 0;
   for (const r of rs) {
     if (r.cached) t.cacheHits++;
     if (r.tier === "small") t.routedSmall++; else t.routedLarge++;
@@ -93,8 +115,22 @@ function accumulate(rs) {
     t.cost.actual += r.actual.costUsd; t.cost.baseline += r.baseline.costUsd; t.cost.saved += r.saved.costUsd;
     t.energyWh.actual += r.actual.energyWh; t.energyWh.baseline += r.baseline.energyWh; t.energyWh.saved += r.saved.energyWh;
     t.carbonG.actual += r.actual.carbonG; t.carbonG.baseline += r.baseline.carbonG; t.carbonG.saved += r.saved.carbonG;
+    if (r.verification) {
+      t.verified++; qSum += r.verification.qualityScore;
+      const vc = r.verification.verifyCost || {};
+      t.verifyCost.costUsd += vc.costUsd || 0; t.verifyCost.energyWh += vc.energyWh || 0;
+      t.verifyCost.carbonG += vc.carbonG || 0; t.verifyCost.tokens += vc.tokens || 0;
+    }
   }
   t.savedPct = t.energyWh.baseline > 0 ? Math.round((1 - t.energyWh.actual / t.energyWh.baseline) * 100) : 0;
+  // Honesty rule: null (not 100%) until at least one sample is verified.
+  t.qualityScore = t.verified ? qSum / t.verified : null;
+  // Net savings = routing savings MINUS the tokens verification itself spends.
+  t.net = {
+    costSaved: t.cost.saved - t.verifyCost.costUsd,
+    energyWh: t.energyWh.saved - t.verifyCost.energyWh,
+    carbonG: t.carbonG.saved - t.verifyCost.carbonG
+  };
   return t;
 }
 
@@ -149,7 +185,8 @@ function summarizeSession(g) {
     id: g.id, label: g.label, tagged: g.tagged,
     from, to, durationMs: new Date(to).getTime() - new Date(from).getTime(),
     calls: a.requests, small: a.routedSmall, large: a.routedLarge, cached: a.cacheHits,
-    tokens: a.tokens, cost: a.cost, energyWh: a.energyWh, carbonG: a.carbonG, savedPct: a.savedPct
+    tokens: a.tokens, cost: a.cost, energyWh: a.energyWh, carbonG: a.carbonG, savedPct: a.savedPct,
+    verified: a.verified, qualityScore: a.qualityScore, net: a.net
   };
 }
 
@@ -194,20 +231,37 @@ function summary(filter = {}, now = Date.now()) {
 
 function recent(n = 25) { return records.slice(-n).reverse(); }
 
+// Daily rollups computed from the real log (survive restarts because records
+// persist). One entry per UTC day, reusing accumulate() so the numbers reconcile
+// exactly with /api/summary for the same period.
+function dailyRollups() {
+  const byDay = new Map();
+  for (const r of records) {
+    const day = String(r.ts).slice(0, 10); // yyyy-mm-dd
+    if (!byDay.has(day)) byDay.set(day, []);
+    byDay.get(day).push(r);
+  }
+  return [...byDay.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([date, rs]) => {
+    const a = accumulate(rs);
+    return { date, requests: a.requests, tokens: a.tokens, cost: a.cost, energyWh: a.energyWh, carbonG: a.carbonG, verified: a.verified, avgQuality: a.qualityScore, verifyCost: a.verifyCost, net: a.net };
+  });
+}
+
 const csvCell = (s) => `"${String(s == null ? "" : s).replace(/"/g, '""')}"`;
 function toCsv(pred) {
-  const head = "timestamp,mode,model,tier,cached,prompt_tokens,completion_tokens,cost_usd,energy_wh,carbon_g,baseline_cost_usd,baseline_carbon_g,saved_cost_usd,saved_carbon_g,grid_zone,grid_gco2_per_kwh,grid_source,session";
+  const head = "timestamp,mode,model,tier,cached,prompt_tokens,completion_tokens,cost_usd,energy_wh,carbon_g,baseline_cost_usd,baseline_carbon_g,saved_cost_usd,saved_carbon_g,grid_zone,grid_gco2_per_kwh,grid_source,session,quality_score";
   const rows = select(pred).map((r) =>
     [r.ts, r.mode, r.model, r.tier, r.cached ? 1 : 0, r.promptTokens, r.completionTokens,
      r.actual.costUsd.toFixed(6), r.actual.energyWh.toFixed(4), r.actual.carbonG.toFixed(4),
      r.baseline.costUsd.toFixed(6), r.baseline.carbonG.toFixed(4),
      r.saved.costUsd.toFixed(6), r.saved.carbonG.toFixed(4),
-     r.grid.zone, r.grid.gPerKwh, csvCell(r.grid.source), csvCell(r.session || "")].join(","));
+     r.grid.zone, r.grid.gPerKwh, csvCell(r.grid.source), csvCell(r.session || ""),
+     r.verification ? r.verification.qualityScore.toFixed(3) : ""].join(","));
   return [head, ...rows].join("\n");
 }
 
 module.exports = {
-  init, add, all, clear, recent, toCsv,
-  aggregate, perModel, series, sessions, summary,
+  init, add, addVerification, all, clear, recent, toCsv,
+  aggregate, perModel, series, sessions, summary, dailyRollups,
   predicateFor, rangeCutoff
 };

@@ -67,9 +67,9 @@ test("toCsv() emits a header plus one row per record", () => {
   const lines = store.toCsv().split("\n");
   assert.equal(lines.length, 3, "header + 2 rows");
   assert.ok(lines[0].startsWith("timestamp,mode,model,tier,cached,"));
-  assert.ok(lines[0].endsWith(",session"), "session column present");
-  assert.equal(lines[0].split(",").length, 18, "18 columns in header");
-  assert.equal(lines[1].split(",").length, 18, "row column count matches header");
+  assert.ok(lines[0].endsWith(",session,quality_score"), "session + quality columns present");
+  assert.equal(lines[0].split(",").length, 19, "19 columns in header");
+  assert.equal(lines[1].split(",").length, 19, "row column count matches header");
 });
 
 test("aggregate() on an empty store is zeroed with savedPct 0", () => {
@@ -161,6 +161,32 @@ test("clear() empties the store in memory and on disk", () => {
   assert.equal(store.aggregate().requests, 0);
   const file = path.join(tmpDir, "log.jsonl");
   assert.equal(fs.readFileSync(file, "utf8"), "", "on-disk log truncated");
+});
+
+test("addVerification() attaches quality; aggregate() rolls up quality + net + verify cost", () => {
+  reset();
+  const rec = store.add(makeRec({ tier: "small", tokens: 100, actEnergy: 1, baseEnergy: 4 }));
+  assert.ok(rec.id, "record gets an id");
+  store.addVerification(rec.id, {
+    qualityScore: 0.9, judgeScore: 0.9, judgeReason: "ok", checksPassed: true, checks: {}, referenceModel: "big",
+    verifiedAt: new Date().toISOString(), verifyCost: { tokens: 50, costUsd: 0.002, energyWh: 1.5, carbonG: 0.6 }
+  });
+  const t = store.aggregate();
+  assert.equal(t.verified, 1);
+  assert.ok(Math.abs(t.qualityScore - 0.9) < 1e-9);
+  assert.ok(Math.abs(t.verifyCost.costUsd - 0.002) < 1e-9);
+  // net saved = routing saved - verification overhead
+  assert.ok(Math.abs(t.net.costSaved - (t.cost.saved - 0.002)) < 1e-9);
+  // CSV carries the quality score in the last column
+  const row = store.toCsv().split("\n")[1];
+  assert.ok(row.endsWith(",0.900"), "quality_score in CSV");
+});
+
+test("aggregate() qualityScore is null until a sample is verified (no fake 100%)", () => {
+  reset();
+  store.add(makeRec({ tier: "small", tokens: 100, actEnergy: 1, baseEnergy: 4 }));
+  assert.equal(store.aggregate().qualityScore, null);
+  assert.equal(store.aggregate().verified, 0);
 });
 
 test("summary() bundles totals + series + perModel + sessions for a filter", () => {

@@ -141,6 +141,19 @@ async function main() {
       const secs = (sess.durationMs / 1000).toFixed(1);
       console.log(`  SESSION  ${sess.id}`);
       console.log(`  one agent run = ${sess.calls} calls · ${g(sess.carbonG.actual)} CO₂ · saved ${g(sess.carbonG.saved)} · ${secs}s · ${sess.savedPct}% energy avoided`);
+      // Quality verification — calibrated + conformal. The differentiator: a
+      // distribution-free (marginal, not per-query) bound that quality held.
+      const q = sum.quality || {};
+      const cal = q.calibration || {}, cf = q.conformal || {};
+      if (!q.verified) {
+        console.log(`  quality: not yet verified (sampling ~${Math.round((q.sampleRate || 0) * 100)}% of small answers to calibrate; run more traffic)`);
+      } else if (q.drift && q.drift.drift) {
+        console.log(`  quality: recalibration needed (input drift) — routing biased to large`);
+      } else if (!q.guaranteeReady) {
+        console.log(`  quality (observed): ${Math.round(q.score * 100)}% · insufficient data for a guarantee (calibration n=${cal.n}/${cal.minN})`);
+      } else {
+        console.log(`  quality held at ${Math.round(cf.coverage * 100)}% (${Math.round((1 - cf.alpha) * 100)}% confidence, conformal α=${cf.alpha}, n=${cf.n}) — marginal bound, not per-query`);
+      }
       console.log(bar);
     }
   } catch { /* summary is best-effort decoration */ }

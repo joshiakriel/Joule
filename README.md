@@ -8,7 +8,7 @@ A drop-in, **OpenAI-compatible proxy** that sits in front of your model calls an
 
 It's the working core of the Joule concept: *measure, optimize, and prove the cost and carbon of AI.*
 
-> **Honesty about the numbers.** Token counts and **cost are exact** (from the provider's returned usage × your configured prices). **Energy per inference is an estimate** — no provider exposes measured watt-hours — using a transparent, configurable model anchored to public research (IEA *Energy & AI* 2025; Epoch AI). **Carbon is energy × live grid intensity** from [Electricity Maps](https://www.electricitymaps.com/), aligned to GHG Protocol Scope 2 (location-based) and the SCI standard (ISO/IEC 21031). This mixed measured/estimated approach is exactly how real carbon-accounting tools work — and it's all in `src/config.js` for you to refine.
+> **Honesty about the numbers.** Token counts and **cost are exact** (from the provider's returned usage × your configured prices). **Energy per inference is an estimate** — no provider exposes measured watt-hours — using a transparent, configurable, **decode-weighted** model (energy scales with tokens *generated*, only weakly with prompt length) anchored to GPU-measurement research (ML.ENERGY / Zeus / TokenPowerBench; IEA *Energy & AI* for order-of-magnitude sanity). **Carbon is energy × live grid intensity** from [Electricity Maps](https://www.electricitymaps.com/), aligned to GHG Protocol Scope 2 (location-based) and the SCI standard (ISO/IEC 21031). This mixed measured/estimated approach is exactly how real carbon-accounting tools work — and it's all in `src/config.js` for you to refine.
 
 ## Quick start (2 minutes, no API key, no cost)
 
@@ -58,6 +58,58 @@ curl http://localhost:3000/v1/chat/completions \
 ```
 
 **Streaming** works too — set `"stream": true` for an OpenAI-style SSE stream (`client.chat.completions.create({..., stream:true})`, or `curl -N ... -d '{"model":"auto","stream":true,"messages":[...]}'`). Streamed requests are still routed, metered, and logged (they show up in `/api/stats` and `/api/report`), but the `x-joule-*` metrics headers aren't set — headers flush before token usage is known.
+
+## Quality verification (the differentiator)
+
+Routing to a cheaper model risks a **silent quality regression** — the bill drops, quality
+quietly drops, and you find out days later from support tickets. Joule doesn't just route
+cheaper; it **verifies the cheap answer held quality**, so the savings are defensible.
+
+A bare **LLM-as-judge is scientifically fragile** — documented position/verbosity/
+self-preference bias, and here the *large* model would be judging the *small* model's answer
+(the exact self-preference case), systematically under-rating the cheap answer and
+understating our own savings. So Joule uses a **calibrated + conformal** design and demotes
+the judge to a *labeller*:
+
+1. **Signal** (`src/signals.js`) — a cheap per-request routing signal (the router's own margin;
+   **no extra model call**), computed before generation. Plus post-generation deterministic
+   checks (non-empty, valid JSON when requested, tool-call when tools provided, not truncated).
+2. **Calibration** (`src/calibrate.js`) — **isotonic regression** (Pool-Adjacent-Violators, ~40
+   lines of plain JS, *no ML dependency*) maps the raw signal → calibrated probability the small
+   answer is acceptable. Persisted; refit periodically; **ECE** reported.
+3. **Conformal risk control** (`src/conformal.js`) — a distribution-free threshold (CRC bound,
+   Angelopoulos et al.) such that the probability of unacceptable degradation is bounded by
+   `TARGET_RISK_ALPHA` (default `0.05`). **Route small only when the calibrated score clears it.**
+4. **Judge → labeller only** (`src/verify.js`) — for a sampled fraction (`VERIFY_SAMPLE_RATE`,
+   default `0.1`) of small answers, *off the serving path*, Joule gets a reference (large-model)
+   answer and a **judge panel** label (`JUDGE_MODELS`), with **randomised answer order**, a
+   reference answer in the prompt, and **agreement reporting** (low-agreement samples are treated
+   as low-confidence and excluded). The label feeds calibration; the judge **never gates live
+   traffic**.
+5. **Drift detection** — tracks the routing-signal distribution of live traffic vs. the
+   calibration set; on material drift it warns *"recalibration needed"* and biases to large.
+
+`X-Joule-Quality-Floor` lets a caller demand a stricter per-request bar. The dashboard headline
+reads *"saved X% · quality held at Y% (95% confidence, conformal α=0.05, n=Z)"*, with a quality
+column in the activity log and a quality line per session.
+
+**Honesty rules (non-negotiable — these are the product):**
+- **Never a per-query guarantee.** The conformal bound is **marginal** (population-level) and
+  distribution shift can violate it — every claim reports **n and α**.
+- **Never a fake number.** Below `MIN_CALIBRATION_N` (default `50`) the UI/API show *"insufficient
+  data for a guarantee"* and fall back; with zero samples, *"not yet verified"*.
+- Verification is **sampled, not exhaustive**, and the **judge is a fallible model** (even in a panel).
+- Verification **costs real tokens** — reported **net savings = routing savings − verification
+  overhead** is the headline (positive at the 10% default; honestly negative at 100%).
+
+**Config (env):** `VERIFICATION_MODE` (`conformal`|`judge`, default conformal), `VERIFY_SAMPLE_RATE`
+(0.1), `TARGET_RISK_ALPHA` (0.05), `MIN_CALIBRATION_N` (50), `CALIBRATION_REFIT_EVERY` (200),
+`JUDGE_MODELS` (csv, default = large model), `JUDGE_ACCEPT_THRESHOLD` (0.6),
+`JUDGE_AGREEMENT_THRESHOLD` (0.67), `DRIFT_K` (3), `DRIFT_MIN_N` (30); plus the v1 fallback knobs
+`QUALITY_THRESHOLD`/`VERIFY_ROLLING_WINDOW`/`VERIFY_MIN_SAMPLES`/`VERIFY_PROBE_RATE`. In `DRY_RUN`
+the reference + judge are synthesized, so the whole pipeline runs fully offline.
+
+Lineage: FrugalGPT → Hybrid LLM (ICLR 2024) → conformal risk control.
 
 ## Metering agents & automated workloads
 
@@ -134,10 +186,10 @@ await client.chat.completions.create(
 
 | Route | Purpose |
 |---|---|
-| `POST /v1/chat/completions` | OpenAI-compatible proxy (routes + meters). Optional `X-Joule-Session` header groups a run. |
-| `GET /api/stats` | Instance config, grid + all-time totals (dashboard pills) |
-| `GET /api/summary?range=&tier=&mode=&q=` | Filtered aggregates + time-series + per-model + sessions, all from the real log |
-| `GET /api/report?format=json\|csv&range=&tier=&mode=&q=` | Downloadable audit-style report — honours the same filters |
+| `POST /v1/chat/completions` | OpenAI-compatible proxy (routes + meters). Optional `X-Joule-Session` header groups a run; `X-Joule-Quality-Floor` demands a stricter quality bar for that request. |
+| `GET /api/stats` | Instance config, grid, all-time totals + `quality` block (rolling score, verified %, safety mode, verification overhead, net savings) |
+| `GET /api/summary?range=&tier=&mode=&q=` | Filtered aggregates + time-series + per-model + sessions + `quality`, all from the real log |
+| `GET /api/report?format=json\|csv&range=&tier=&mode=&q=` | Downloadable audit-style report — honours the same filters; includes `verification` stats + methodology |
 | `POST /api/clear` | Truly clears the request log (in memory + on disk) |
 | `GET · POST /api/config` | Masked runtime config — read effective settings / apply overrides (secret-free) |
 | `GET /api/health` | Health check |
@@ -155,6 +207,44 @@ the store (aggregation + CSV), and an in-process integration pass over the proxy
 (non-streaming headers + JSON, streaming SSE, `/api/stats` + `/api/report`, caching,
 routing). Tests run in `DRY_RUN` against an isolated temp data dir, so they never touch
 `data/log.jsonl`.
+
+## ROI since day one
+
+`GET /api/roi` and the dashboard's **ROI** card show savings as a compounding investment, not a
+monthly cost: a cumulative savings-over-time chart (hand-rolled SVG, no chart library), a lifetime
+headline (*"you've saved $X and Y kg CO₂ since <date>"*), and an honest **net-of-fees** line —
+gross savings − verification overhead − subscription (`SUBSCRIPTION_COST_MONTHLY`), with average
+monthly saving and payback. All figures come from real logged daily rollups that reconcile exactly
+with `/api/summary`; with no history it shows an empty state, never a projection dressed as fact.
+
+## Deployment modes & data residency
+
+Every major AI gateway is foreign-hosted. Under UAE PDPL, regulated data generally cannot be
+processed abroad without a lawful basis — so **self-hosting Joule in-country is a structural
+advantage**. Joule makes the data-handling posture explicit rather than hiding it.
+
+- **Deployment mode** — `DEPLOYMENT_MODE=cloud|self_hosted`, `DATA_REGION` (where Joule runs),
+  `PROVIDER_REGION` (where the upstream model lives). `/api/stats` and the dashboard show a
+  banner; when the regions differ it **warns plainly**: *"prompts leave `<DATA_REGION>` to reach
+  the model provider"* — the exact fact a compliance officer needs.
+- **Retention off by default** — `LOG_PROMPTS=false` (default) persists **only metadata** (tokens,
+  model, tier, cost, energy, carbon, scores) — never prompt or response text. `PII_REDACT=true`
+  additionally strips emails / phone numbers / long digit runs before anything is logged.
+- **Self-host / air-gapped** — `docker compose up --build` runs Joule entirely on your
+  infrastructure; the **only** outbound call is to the model provider you configure. Point
+  `UPSTREAM_BASE_URL` at an in-region or on-prem model server (e.g. vLLM/Ollama) for a fully
+  in-country or air-gapped deployment.
+- **Compliance summary in the report** — `/api/report` includes a `deployment` block (mode, data
+  region, provider region, whether prompt text was retained, redaction on/off) so the export is
+  something a risk officer can file.
+
+```bash
+docker compose up --build        # → http://localhost:3000 (DRY_RUN, self_hosted, metadata-only)
+```
+
+> **We describe residency; we do not certify legal compliance.** Whether a given configuration
+> satisfies PDPL (or any regime) is a determination for your counsel — Joule gives you the
+> controls and the paper trail, not a legal guarantee.
 
 ## Deploy to Render (free tier, live URL)
 

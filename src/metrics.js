@@ -10,9 +10,11 @@ const config = require("./config");
  * always gone to the large model) so we can report verifiable savings.
  */
 
-function energyWh(tier, totalTokens) {
+// Decode-weighted: energy scales mainly with tokens GENERATED (completion), only
+// weakly with prompt length. See config.energy for the anchoring references.
+function energyWh(tier, promptTokens, completionTokens) {
   const e = config.energy[tier] || config.energy.large;
-  return e.baseWh + e.perKTokWh * (totalTokens / 1000);
+  return e.baseWh + e.perKTokOutWh * (completionTokens / 1000) + e.perKTokInWh * (promptTokens / 1000);
 }
 
 function costUsd(model, tier, promptTokens, completionTokens) {
@@ -24,16 +26,17 @@ function compute({ model, tier, promptTokens, completionTokens, gPerKwh, cached 
   const totalTokens = promptTokens + completionTokens;
 
   // Actual (routed) request
+  const aWh = energyWh(tier, promptTokens, completionTokens);
   const actual = cached
     ? { costUsd: 0, energyWh: 0.001, carbonG: 0 } // cache hit ≈ free
     : {
         costUsd: costUsd(model, tier, promptTokens, completionTokens),
-        energyWh: energyWh(tier, totalTokens),
-        carbonG: (energyWh(tier, totalTokens) / 1000) * gPerKwh
+        energyWh: aWh,
+        carbonG: (aWh / 1000) * gPerKwh
       };
 
   // Baseline: same tokens, but always the large model / large tier
-  const bWh = energyWh("large", totalTokens);
+  const bWh = energyWh("large", promptTokens, completionTokens);
   const baseline = {
     costUsd: costUsd(config.modelLarge, "large", promptTokens, completionTokens),
     energyWh: bWh,

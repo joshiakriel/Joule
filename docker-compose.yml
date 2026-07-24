@@ -1,0 +1,32 @@
+# One-command self-hosted / in-country Joule.
+#   docker compose up --build   →  http://localhost:3000
+#
+# Runs entirely on your infrastructure. The ONLY outbound network call is to the
+# model provider you configure (UPSTREAM_BASE_URL) — point it at an in-region or
+# on-prem model server for a fully in-country / air-gapped posture.
+services:
+  joule:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      # Demoable immediately with no keys:
+      DRY_RUN: "true"
+      # Deployment & residency posture (describe; not a compliance certification):
+      DEPLOYMENT_MODE: "self_hosted"
+      DATA_REGION: "AE"
+      PROVIDER_REGION: "AE"        # set to your model endpoint's region
+      # Privacy by configuration — safe defaults:
+      LOG_PROMPTS: "false"          # metadata-only; no prompt/response text persisted
+      PII_REDACT: "false"
+      # Go live: set DRY_RUN=false and point at your model server.
+      # UPSTREAM_BASE_URL: "http://your-local-model:8000/v1"
+      # UPSTREAM_API_KEY: "..."
+      # MODEL_SMALL: "..."
+      # MODEL_LARGE: "..."
+    # Persist the request log + calibration across restarts:
+    volumes:
+      - joule-data:/app/data
+    restart: unless-stopped
+volumes:
+  joule-data:

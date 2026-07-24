@@ -143,6 +143,21 @@
   .sess-badge.adhoc{color:var(--muted);border-color:var(--line)}
   td.num,th.num{text-align:right;font-family:'JetBrains Mono',monospace}
   .tbl-scroll{overflow-x:auto}
+  /* quality verification */
+  .qhold{margin-top:10px;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted)}
+  .qhold b{font-family:'Space Grotesk',sans-serif;font-weight:600}
+  .q-good{color:var(--cyan)} .q-warn{color:var(--amber)} .q-bad{color:#ff6b6b}
+  .pill.safety{color:var(--amber);border-color:rgba(255,178,51,.5);background:var(--amber-dim)}
+  .netline{margin-top:12px;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--muted);line-height:1.6}
+  .netline b{color:var(--text)}
+  /* deployment / residency banner */
+  .banner{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin-bottom:16px;font-size:12.5px}
+  .banner.ok{background:var(--cyan-dim);border-color:rgba(51,227,199,.3);color:var(--text)}
+  .banner.warn{background:var(--amber-dim);border-color:rgba(255,178,51,.35);color:var(--text)}
+  .banner .bi{font-size:15px}
+  .banner .flow{font-family:'JetBrains Mono',monospace;font-size:11px}
+  .banner .tag{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:2px 7px}
+  .roi-head{font-size:14px;color:var(--text);line-height:1.5}
 </style>
 </head>
 <body>
@@ -155,6 +170,8 @@
     <div class="status" id="status"></div>
   </header>
   <div class="tagline">Real proxy, real tokens, real grid. Point any OpenAI client at <span class="mono cyan">/v1</span>, or send a test prompt below — Joule routes it, meters cost · energy · carbon, and logs an auditable record.</div>
+
+  <div class="banner ok" id="banner" style="display:none"></div>
 
   <div class="arch">
     <div class="arch-flow">
@@ -212,12 +229,15 @@
         <div class="meter-lbl"><span>Joule energy</span><span class="v" id="routeWh">0 Wh</span></div>
         <div class="meter routed"><div class="fill" id="routeFill"></div></div>
       </div>
-      <div class="saved"><div class="big" id="pct">0%</div><div class="cap">energy &amp; CO₂ avoided</div></div>
+      <div class="saved"><div class="big" id="pct">0%</div><div class="cap">energy &amp; CO₂ avoided</div>
+        <div class="qhold" id="qhold">quality: <span class="muted">not yet verified</span></div>
+      </div>
       <div class="kpis">
         <div class="kpi"><div class="n cyan" id="kCost">$0.00</div><div class="l">Cost saved</div><div class="s" id="kReq">0 requests</div></div>
         <div class="kpi"><div class="n cyan" id="kEnergy">0 Wh</div><div class="l">Energy saved</div><div class="s" id="kCache">0 cache hits</div></div>
         <div class="kpi"><div class="n cyan" id="kCo2">0 g</div><div class="l">CO₂ avoided</div><div class="s" id="kGrid">grid —</div></div>
       </div>
+      <div class="netline" id="netline"></div>
     </div>
   </div>
 
@@ -226,6 +246,11 @@
     <div class="chart-lgnd"><span><i class="a"></i>Joule (actual)</span><span><i class="b"></i>always-large baseline</span></div>
     <div class="chart" id="chart"></div>
     <div class="chart-x"><span id="chartFrom">—</span><span id="chartTo">now</span></div>
+  </div>
+
+  <div class="card" id="roiCard" style="margin-top:18px">
+    <h2>ROI since day one <span class="muted" style="text-transform:none;letter-spacing:0">— savings compound; verification &amp; fees netted out</span></h2>
+    <div id="roiBody"><div class="empty-log">No history yet.</div></div>
   </div>
 
   <div class="card logwrap">
@@ -360,6 +385,9 @@ const fmtMs = (ms) => ms >= 1000 ? (ms/1000).toFixed(1)+"s" : Math.round(ms)+"ms
 const clockHM = (ts) => new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 // Host of the real upstream provider (e.g. "api.groq.com"), or a generic fallback.
 const providerHost = (url) => { try { return new URL(url).host || "model provider"; } catch { return "model provider"; } };
+// Quality helpers — null score means "not yet verified" (never a fake 100%).
+const qClass = (s) => s == null ? "muted" : (s >= 0.8 ? "q-good" : (s >= 0.6 ? "q-warn" : "q-bad"));
+const qPct = (s) => s == null ? "—" : Math.round(s * 100) + "%";
 
 async function refresh() {
   let meta, view;
@@ -369,11 +397,14 @@ async function refresh() {
       fetch("/api/summary?" + qs()).then(r => r.json())
     ]);
   } catch { return; }
-  const g = meta.grid, c = meta.config, t = view.totals;
+  const g = meta.grid, c = meta.config, t = view.totals, qv = view.quality || {};
 
   // status pills (global instance state — not filtered)
   const pills = [];
   pills.push(`<span class="pill ${c.dryRun ? "warn" : "ok"}"><span class="d"></span>${c.dryRun ? "DRY-RUN" : "LIVE"}</span>`);
+  if (qv.safetyMode) pills.push(`<span class="pill safety"><span class="d"></span>SAFETY MODE · routing large</span>`);
+  if (qv.drift && qv.drift.drift) pills.push(`<span class="pill safety"><span class="d"></span>DRIFT · recalibration needed</span>`);
+  if (qv.guaranteeReady) pills.push(`<span class="pill ok"><span class="d"></span>verified · α=${qv.conformal.alpha} n=${qv.conformal.n}</span>`);
   pills.push(`<span class="pill ${c.hasUpstreamKey ? "ok" : "warn"}"><span class="d"></span>${c.hasUpstreamKey ? "API key set" : "no API key"}</span>`);
   // grid pill — honest about provenance: live EM value vs. estimated fallback constant
   const gridPill = g.live
@@ -382,6 +413,24 @@ async function refresh() {
   pills.push(`<span class="pill ${g.live ? "ok" : "warn"}"><span class="d"></span>${gridPill}</span>`);
   pills.push(`<span class="pill"><span class="d"></span>${c.routingEnabled ? "routing on" : "routing off"}</span>`);
   $("status").innerHTML = pills.join("");
+
+  // deployment / residency banner (we describe residency; we don't certify compliance)
+  const dep = meta.deployment;
+  if (dep) {
+    const b = $("banner"); b.style.display = "flex";
+    const modeTag = dep.mode === "self_hosted" ? "self-hosted" : "cloud";
+    const retention = dep.promptTextRetained ? ("prompts retained" + (dep.piiRedaction ? " (PII-redacted)" : "")) : "metadata-only (no prompt text stored)";
+    if (dep.crossBorder) {
+      b.className = "banner warn";
+      b.innerHTML = '<span class="bi">⚠</span><span>Cross-border: <b>prompts leave ' + esc(dep.dataRegion) + ' to reach the model provider</b></span>' +
+        '<span class="flow">' + esc(dep.dataRegion) + ' → ' + esc(dep.providerRegion) + '</span>' +
+        '<span class="tag">' + modeTag + '</span><span class="tag">' + esc(retention) + '</span>';
+    } else {
+      b.className = "banner ok";
+      b.innerHTML = '<span class="bi">🛡</span><span>In-region: data & model provider both in <b>' + esc(dep.dataRegion) + '</b></span>' +
+        '<span class="tag">' + modeTag + '</span><span class="tag">' + esc(retention) + '</span>';
+    }
+  }
 
   // architecture strip — only say "Live … (Electricity Maps)" when it truly is
   $("archGridRow").classList.toggle("live", !!g.live);
@@ -407,10 +456,42 @@ async function refresh() {
   $("kCo2").textContent = fmtG(t.carbonG.saved);
   $("kGrid").textContent = "grid " + Math.round(g.gPerKwh) + " gCO₂/kWh" + (g.live ? "" : " · est");
 
+  // headline quality NEXT TO savings — honest about what the data supports.
+  // Never a fake 100%; never a guarantee the calibration size can't back.
+  const cal = qv.calibration || { n: 0, minN: 50, ece: null };
+  const cf = qv.conformal || { alpha: 0.05, coverage: null, ready: false };
+  const drift = qv.drift || { drift: false };
+  const confPct = Math.round((1 - (cf.alpha || 0.05)) * 100);
+  if (!qv.verified) {
+    $("qhold").innerHTML = 'quality: <span class="muted">not yet verified</span> ' +
+      '<span class="muted">(sampling ' + Math.round((qv.sampleRate || 0) * 100) + '% of small-tier answers to calibrate)</span>';
+  } else if (drift.drift) {
+    $("qhold").innerHTML = '<b class="q-warn">quality: recalibration needed</b> <span class="muted">— input distribution drifted; routing biased to large until refit</span>';
+  } else if (!qv.guaranteeReady) {
+    $("qhold").innerHTML = 'quality (observed): <b class="' + qClass(qv.score) + '">' + qPct(qv.score) + '</b> ' +
+      '<span class="muted">· <b class="q-warn">insufficient data for a guarantee</b> (calibration n=' + cal.n + '/' + cal.minN + ')</span>';
+  } else {
+    $("qhold").innerHTML = 'quality held at <b class="' + qClass(cf.coverage) + '">' + qPct(cf.coverage) + '</b> ' +
+      '<span class="muted">(' + confPct + '% confidence · conformal α=' + cf.alpha + ' · n=' + cf.n + ')</span>' +
+      (qv.safetyMode ? ' <b class="q-warn">· safety mode</b>' : '');
+  }
+  // net-of-verification honesty + verification method status
+  const net = t.net || { costSaved: t.cost.saved, energyWh: t.energyWh.saved, carbonG: t.carbonG.saved };
+  const ov = qv.overhead || { costUsd: 0, energyWh: 0, tokens: 0 };
+  const eceTxt = cal.ece == null ? "n/a" : cal.ece.toFixed(3);
+  $("netline").innerHTML =
+    'net of verification — saved <b>' + fmtUsd(net.costSaved) + '</b> · <b>' + fmtWh(net.energyWh) + '</b> · <b>' + fmtG(net.carbonG) + '</b>' +
+    '  <span class="muted">(overhead ' + fmtUsd(ov.costUsd) + ' · ' + (ov.tokens || 0) + ' tok · ' + (qv.verified || 0) + ' labels)</span>' +
+    '<br>verification: <b>' + esc(qv.mode || "") + '</b> · calibration n=<b>' + cal.n + '</b> · ECE ' + eceTxt +
+    ' · conformal ' + (cf.ready ? ('coverage ' + qPct(cf.coverage) + ' @ α=' + cf.alpha) : 'not yet certified') +
+    ' · drift <b class="' + (drift.drift ? 'q-warn' : '') + '">' + esc((drift.status || "—")) + '</b>' +
+    ' <span class="muted">— marginal bound, not a per-query guarantee</span>';
+
   renderChart(view.series, view.window);
   renderSessions(view.sessions);
   renderModels(view.perModel);
   renderLog(view.recent);
+  renderRoi();
 
   // exports carry the active filter so you download exactly what you see
   $("dljson").href = "/api/report?format=json&" + qs();
@@ -433,27 +514,36 @@ function renderChart(series, win) {
 function renderLog(recent) {
   const box = $("logbox");
   if (!recent.length) { box.innerHTML = '<div class="empty-log">No requests match this filter.</div>'; return; }
-  box.innerHTML = '<div class="tbl-scroll"><table><thead><tr><th>When</th><th>Tier</th><th>Model</th><th>Session</th><th class="num">Tokens</th><th class="num">Cost</th><th class="num">Energy</th><th class="num">CO₂</th><th class="num">Saved</th></tr></thead><tbody>'+
-    recent.map(r =>
-      '<tr><td class="mono muted" title="'+esc(new Date(r.ts).toLocaleString())+'">'+relTime(r.ts)+'</td>'+
-      '<td><span class="dot '+r.tier+'"></span>'+r.tier+(r.cached?' · cache':'')+'</td>'+
+  box.innerHTML = '<div class="tbl-scroll"><table><thead><tr><th>When</th><th>Tier</th><th>Model</th><th>Session</th><th class="num">Tokens</th><th class="num">Cost</th><th class="num">Energy</th><th class="num">CO₂</th><th class="num">Saved</th><th class="num">Quality</th></tr></thead><tbody>'+
+    recent.map(r => {
+      const vq = r.verification ? r.verification.qualityScore : null;
+      const qcell = vq == null
+        ? '<td class="num muted" title="not sampled">—</td>'
+        : '<td class="num '+qClass(vq)+'" title="'+esc(r.verification.judgeReason||"")+'">'+qPct(vq)+'</td>';
+      return '<tr><td class="mono muted" title="'+esc(new Date(r.ts).toLocaleString())+'">'+relTime(r.ts)+'</td>'+
+      '<td><span class="dot '+r.tier+'"></span>'+r.tier+(r.cached?' · cache':'')+(r.qualityEscalated?' · ↑q':'')+'</td>'+
       '<td class="mono">'+esc(r.model)+'</td>'+
       '<td class="mono muted">'+(r.session?esc(r.session):'—')+'</td>'+
       '<td class="num">'+r.totalTokens+'</td>'+
       '<td class="num">'+fmtUsd(r.actual.costUsd)+'</td>'+
       '<td class="num">'+fmtWh(r.actual.energyWh)+'</td>'+
       '<td class="num">'+fmtG(r.actual.carbonG)+'</td>'+
-      '<td class="num cyan">'+fmtUsd(r.saved.costUsd)+'</td></tr>'
-    ).join("")+'</tbody></table></div>';
+      '<td class="num cyan">'+fmtUsd(r.saved.costUsd)+'</td>'+
+      qcell+'</tr>';
+    }).join("")+'</tbody></table></div>';
 }
 
 function renderSessions(sessions) {
   const box = $("sessBox");
   if (!sessions.length) { box.innerHTML = '<div class="empty-log">No sessions yet.</div>'; return; }
-  box.innerHTML = '<div class="tbl-scroll"><table><thead><tr><th>Session</th><th class="num">Calls</th><th class="num">S/L</th><th class="num">Tokens</th><th class="num">Energy</th><th class="num">CO₂</th><th class="num">Saved CO₂</th><th class="num">Saved%</th><th class="num">Duration</th><th>When</th></tr></thead><tbody>'+
+  box.innerHTML = '<div class="tbl-scroll"><table><thead><tr><th>Session</th><th class="num">Calls</th><th class="num">S/L</th><th class="num">Tokens</th><th class="num">Energy</th><th class="num">CO₂</th><th class="num">Saved CO₂</th><th class="num">Saved%</th><th class="num">Quality</th><th class="num">Duration</th><th>When</th></tr></thead><tbody>'+
     sessions.map(s => {
       const badge = s.tagged ? '<span class="sess-badge agent">agent</span>' : '<span class="sess-badge adhoc">ad-hoc</span>';
       const label = s.tagged ? esc(s.label) : 'ad-hoc activity';
+      const q = s.qualityScore;
+      const qcell = q == null
+        ? '<td class="num muted" title="no verified samples in this run">—</td>'
+        : '<td class="num '+qClass(q)+'" title="'+s.verified+' verified">'+qPct(q)+'</td>';
       return '<tr><td class="mono">'+label+badge+'</td>'+
         '<td class="num">'+s.calls+'</td>'+
         '<td class="num muted">'+s.small+'/'+s.large+'</td>'+
@@ -462,9 +552,38 @@ function renderSessions(sessions) {
         '<td class="num">'+fmtG(s.carbonG.actual)+'</td>'+
         '<td class="num cyan">'+fmtG(s.carbonG.saved)+'</td>'+
         '<td class="num cyan">'+(s.savedPct||0)+'%</td>'+
+        qcell+
         '<td class="num muted">'+fmtMs(s.durationMs)+'</td>'+
         '<td class="mono muted" title="'+esc(new Date(s.to).toLocaleString())+'">'+relTime(s.to)+'</td></tr>';
     }).join("")+'</tbody></table></div>';
+}
+
+async function renderRoi() {
+  let r; try { r = await (await fetch("/api/roi")).json(); } catch { return; }
+  const box = $("roiBody");
+  if (r.empty) { box.innerHTML = '<div class="empty-log">No history yet — run some traffic to see cumulative savings.</div>'; return; }
+  const start = new Date(r.startDate + "T00:00:00Z").toLocaleDateString();
+  const kg = r.lifetime.savedCarbonG / 1000;
+  const net = r.net;
+  // hand-rolled cumulative SVG (no chart library)
+  const w = 560, h = 90, pad = 4, s = r.series;
+  const xs = s.map((_, i) => s.length > 1 ? pad + i / (s.length - 1) * (w - 2 * pad) : w / 2);
+  const maxC = Math.max(...s.map((d) => d.cumSavedCost), 1e-9);
+  const ys = s.map((d) => h - pad - (d.cumSavedCost / maxC) * (h - 2 * pad));
+  const pts = xs.map((x, i) => x.toFixed(1) + "," + ys[i].toFixed(1)).join(" ");
+  const area = pad + "," + (h - pad) + " " + pts + " " + xs[xs.length - 1].toFixed(1) + "," + (h - pad);
+  box.innerHTML =
+    '<div class="roi-head">You\'ve saved <b class="cyan">' + fmtUsd(net.grossSaved) + '</b> and <b class="cyan">' + kg.toFixed(2) + ' kg CO₂</b> since ' + esc(start) +
+      ' <span class="muted">(' + r.lifetime.requests + ' requests over ' + r.days + ' day' + (r.days === 1 ? '' : 's') + ')</span></div>' +
+    '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" style="width:100%;height:90px;margin-top:10px">' +
+      '<polygon points="' + area + '" fill="rgba(51,227,199,.12)"/>' +
+      '<polyline points="' + pts + '" fill="none" stroke="var(--cyan)" stroke-width="2"/>' +
+    '</svg>' +
+    '<div class="netline">net of fees — gross saved <b>' + fmtUsd(net.grossSaved) + '</b> − verification <b>' + fmtUsd(net.verifyCost) + '</b>' +
+      (net.subscriptionMonthly > 0 ? (' − subscription <b>' + fmtUsd(net.subscriptionToDate) + '</b> ($' + net.subscriptionMonthly + '/mo)') : '') +
+      ' = <b class="' + (net.netAfterFees >= 0 ? 'cyan' : 'q-warn') + '">' + fmtUsd(net.netAfterFees) + '</b>' +
+      '<br>avg monthly saving <b>' + fmtUsd(net.avgMonthlySaving) + '</b>' +
+      (net.paybackMonths != null ? (' · payback in <b>' + net.paybackMonths.toFixed(1) + '</b> months') : ' · set SUBSCRIPTION_COST_MONTHLY for payback') + '</div>';
 }
 
 function renderModels(perModel) {

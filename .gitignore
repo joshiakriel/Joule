@@ -3,3 +3,9 @@ node_modules/
 data/
 *.log
 .DS_Store
+
+# Internal / business material — kept local, never pushed
+CLAUDE.md
+Joule_MVP_agent_prompts*.md
+Joule_Investor_QA*.pdf
+*_agent_prompts*.md
