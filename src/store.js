@@ -111,6 +111,7 @@ function accumulate(rs) {
     routingSavedUsd: 0,                               // saved by model routing (non-cache, non-semantic)
     semantic: { hits: 0, savedUsd: 0, embedCostUsd: 0, netSavedUsd: 0 }, // Layer-2 semantic cache line
     batch: { count: 0, savedUsd: 0 },                 // batch-discount savings line (hierarchy #2)
+    reasoning: { requests: 0, downgrades: 0, reasoningTokens: 0, savedTokens: 0, savedUsd: 0 }, // reasoning-budget line
     prefixCache: { cachedTokens: 0, writeTokens: 0, savedUsd: 0, writePremiumUsd: 0, netSavedUsd: 0 },
     hostile: 0                                         // cache-hostile prompt structures
   };
@@ -128,7 +129,12 @@ function accumulate(rs) {
       const sc = r.semantic || {}; t.semantic.embedCostUsd += sc.embedCostUsd || 0;
       t.semantic.netSavedUsd += (sc.netSavedUsd != null ? sc.netSavedUsd : r.saved.costUsd - (sc.embedCostUsd || 0));
     } else t.routingSavedUsd += r.saved.costUsd;
-    if (r.mode === "batch" && r.batch) { t.batch.count++; t.batch.savedUsd += r.batch.savedUsd || 0; }
+    if (r.batch) { t.batch.count++; t.batch.savedUsd += r.batch.savedUsd || 0; } // /v1/batch or X-Joule-Latency-Tolerant
+    if (r.reasoning) {
+      t.reasoning.requests++; if (r.reasoning.downgraded) t.reasoning.downgrades++;
+      t.reasoning.reasoningTokens += r.reasoning.reasoningTokens || 0;
+      t.reasoning.savedTokens += r.reasoning.savedTokens || 0; t.reasoning.savedUsd += r.reasoning.savedUsd || 0;
+    }
     if (r.cacheHostile) t.hostile++;
     if (r.prefixCache) {
       const pc = r.prefixCache;

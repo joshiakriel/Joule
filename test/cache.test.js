@@ -36,3 +36,19 @@ test("breakevenHitRate is 0 with no write premium and positive with one", () => 
   const be = cacheadvice.breakevenHitRate(0.1, 1.25); // 0.25 / (0.25 + 0.9)
   assert.ok(be > 0.2 && be < 0.25);
 });
+
+test("advisory() produces quantified before/after findings with a $ estimate", () => {
+  const recs = [
+    { cacheHostile: true, promptTokens: 2000, model: "gpt-4o", prefixCache: null },
+    { cacheHostile: true, promptTokens: 2000, model: "gpt-4o" },
+    { cacheHostile: false, promptTokens: 2000, model: "gpt-4o-mini" }
+  ];
+  const a = cacheadvice.advisory(recs);
+  assert.equal(a.requests, 3);
+  const f = a.findings.find((x) => x.pattern === "dynamic-content-before-static");
+  assert.equal(f.count, 2, "counts the hostile requests");
+  assert.equal(f.currentHitRate, 0);
+  assert.ok(f.estimatedHitRate > 0 && f.estSavingUsd > 0, "before/after + $ impact");
+  assert.match(f.method, /estimate/i);
+  assert.equal(cacheadvice.advisory([]).requests, 0, "empty state");
+});

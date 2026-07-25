@@ -76,6 +76,31 @@ const config = {
   },
 
   /**
+   * Reasoning-budget control (savings-hierarchy #3, the routing tier). Reasoning
+   * models (o-series, R1, extended-thinking Claude, Gemini thinking) emit 5–50×
+   * more tokens; accuracy has diminishing returns past a depth, so CAPPING the
+   * thinking budget usually preserves quality while cutting cost. Downgrading a
+   * reasoning model to a standard one for simple prompts is a QUALITY-RISK decision
+   * and is verified through the same conformal path as tier routing.
+   * Table-driven: each entry maps a model-name pattern to its thinking-budget param.
+   */
+  reasoning: {
+    defaultEffort: (["low", "medium", "high"].includes(process.env.REASONING_DEFAULT_EFFORT) ? process.env.REASONING_DEFAULT_EFFORT : "medium"),
+    maxThinkingTokens: num(process.env.REASONING_MAX_THINKING_TOKENS, 4000),
+    downgradeEnabled: bool(process.env.REASONING_DOWNGRADE_ENABLED, false),
+    standardModel: process.env.REASONING_STANDARD_MODEL || "gpt-4o-mini",
+    effortTokens: { low: 1000, medium: 4000, high: 12000 }, // effort -> nominal thinking-token cap
+    models: [
+      { match: "^o[134]", family: "openai", param: "reasoning_effort" },      // o1/o3/o4
+      { match: "gpt-5", family: "openai", param: "reasoning_effort" },
+      { match: "deepseek-r", family: "open", param: "max_thinking_tokens" },   // R1
+      { match: "qwq", family: "open", param: "max_thinking_tokens" },
+      { match: "thinking|extended-thinking", family: "anthropic", param: "budget_tokens" },
+      { match: "gemini.*thinking", family: "google", param: "thinking_budget" }
+    ]
+  },
+
+  /**
    * OpenTelemetry GenAI interop. `/metrics` (Prometheus) is always available and
    * dependency-free. OTLP/HTTP JSON span export (GenAI semantic conventions) is
    * opt-in: set OTEL_EXPORTER_OTLP_ENDPOINT (+ OTEL_ENABLED) and each request emits
@@ -98,8 +123,16 @@ const config = {
     enforce: bool(process.env.BUDGET_ENFORCE, false),
     globalUsd: num(process.env.BUDGET_GLOBAL_USD, 0),
     dailyUsd: num(process.env.BUDGET_DAILY_USD, 0),
-    sessionUsd: num(process.env.BUDGET_SESSION_USD, 0),           // per X-Joule-Session cap (agent-run cap)
-    assumedCompletionTokens: num(process.env.BUDGET_ASSUMED_COMPLETION_TOKENS, 500) // reservation estimate
+    // per X-Joule-Session (agent-run) caps — cost and/or call count. Breaching a
+    // block cap TERMINATES the session (further calls rejected).
+    sessionUsd: num(process.env.BUDGET_SESSION_USD, num(process.env.MAX_COST_PER_SESSION, 0)),
+    maxCallsPerSession: num(process.env.MAX_CALLS_PER_SESSION, 0),
+    assumedCompletionTokens: num(process.env.BUDGET_ASSUMED_COMPLETION_TOKENS, 500),
+    // fail-open (default): if the budget engine errors, ALLOW traffic and log loudly —
+    // a store hiccup must not take down a customer's production. fail-closed rejects.
+    failMode: (process.env.BUDGET_FAIL_MODE === "fail_closed" ? "fail_closed" : "fail_open"),
+    // Optional named budgets: JSON array of {id,scope,key?,limitUsd,window,action}.
+    defs: (() => { try { return process.env.BUDGET_DEFS ? JSON.parse(process.env.BUDGET_DEFS) : []; } catch { return []; } })()
   },
 
   // Routing tunables (not runtime-configurable via the UI)

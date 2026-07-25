@@ -13,6 +13,22 @@ const semcache = require("./semcache");
 const budget = require("./budget");
 const otel = require("./otel");
 const batch = require("./batch");
+const reasoning = require("./reasoning");
+
+// Fill in reasoning-token counts + capping/downgrade savings (labelled estimates).
+function finalizeReasoning(info, tier, usage) {
+  if (!info) return null;
+  const outPrice = config.priceFor(info.model, tier).out;
+  let reasoningTokens, savedTokens;
+  if (config.dryRun) {
+    reasoningTokens = info.downgraded ? 0 : Math.round(info.capTokens * 0.6);
+    savedTokens = info.downgraded ? Math.round(info.capTokens * 0.6) : Math.max(0, (info.uncappedTokens || 0) - info.capTokens);
+  } else {
+    reasoningTokens = info.downgraded ? 0 : reasoning.reasoningTokens(usage);
+    savedTokens = info.downgraded ? info.capTokens : Math.max(0, (info.uncappedTokens || 0) - info.capTokens);
+  }
+  return { ...info, reasoningTokens, savedTokens, savedUsd: (savedTokens / 1e6) * outPrice };
+}
 
 // Estimate a request's cost BEFORE calling the model (prompt tokens + an assumed
 // completion length at the routed tier's price) — used for budget reservation.
@@ -107,7 +123,7 @@ const sessionOf = (req) => {
 // meter + log a request identically for streaming and non-streaming paths.
 // Returns the compute result with the stored record attached as `.rec` (so the
 // caller can hand it to the background verifier).
-function meterAndLog({ started, mode, model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText, completionText, prefixCache, semantic, batch }) {
+function meterAndLog({ started, mode, model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText, completionText, prefixCache, semantic, batch, reasoning }) {
   // A semantic hit serves a stored answer, so the model recompute is avoided (cache-like);
   // its embedding cost is tracked separately on the semantic savings line.
   const m = compute({ model, tier, promptTokens, completionTokens, gPerKwh: grid.gPerKwh, cached: mode === "cache" || mode === "semantic_cache" });
@@ -124,7 +140,9 @@ function meterAndLog({ started, mode, model, tier, decision, grid, promptTokens,
     // Layer-2 semantic cache (quality risk — separate line)
     semantic: semantic || null,
     // Batch discount (zero quality risk — separate line)
-    batch: batch ? { discount: batch.discount, savedUsd: m.actual.costUsd * batch.discount } : null
+    batch: batch ? { discount: batch.discount, savedUsd: m.actual.costUsd * batch.discount } : null,
+    // Reasoning-budget control (thinking-token capping / downgrade — separate line)
+    reasoning: reasoning || null
   };
   if (semantic) rec.semantic.netSavedUsd = m.saved.costUsd - (semantic.embedCostUsd || 0);
   // Retention is OFF by default: prompt/response TEXT is persisted only when
@@ -161,7 +179,7 @@ function streamText(res, { id, created, model, content }) {
 // headers here (they're flushed before usage is known) — streamed requests are
 // metered via the store, so they still appear in /api/stats and /api/report.
 // ---------------------------------------------------------------------------
-async function handleStreaming({ res, started, body, userText, decision, tier, model, cacheKey, grid, session, qualityEscalated, routing, reservation }) {
+async function handleStreaming({ res, started, body, userText, decision, tier, model, cacheKey, grid, session, qualityEscalated, routing, reservation, reasoningInfo, reasoningPlan }) {
   const id = "joule-stream-" + started;
   const created = Math.floor(started / 1000);
 
@@ -187,7 +205,7 @@ async function handleStreaming({ res, started, body, userText, decision, tier, m
     const completionTokens = estTokens(answer);
     cacheSet(cacheKey, buildCompletion({ id, created, model, content: answer, promptTokens, completionTokens }));
     const dryPrefix = prefixCacheSavings({ model, tier, cachedInputTokens: Math.round(promptTokens * config.cache.dryRunPrefixRate), writeInputTokens: 0 });
-    const mDry = meterAndLog({ started, mode: "dry_run", model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: answer, prefixCache: dryPrefix });
+    const mDry = meterAndLog({ started, mode: "dry_run", model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: answer, prefixCache: dryPrefix, reasoning: finalizeReasoning(reasoningInfo, tier, null) });
     budget.commit(reservation, mDry.actual.costUsd); if (reservation) reservation.committed = true;
     verify.maybeVerify({ rec: mDry.rec, userText, answer, body });
     return;
@@ -201,8 +219,8 @@ async function handleStreaming({ res, started, body, userText, decision, tier, m
   const upstream = await fetch(config.upstreamBaseUrl + "/chat/completions", {
     method: "POST",
     headers: { "content-type": "application/json", authorization: "Bearer " + config.upstreamApiKey },
-    // include_usage asks the provider to emit a final usage-bearing chunk; harmless where ignored
-    body: JSON.stringify({ ...body, model, stream: true, stream_options: { include_usage: true } }),
+    // include_usage asks the provider to emit a final usage-bearing chunk; injects a capped thinking budget on reasoning models
+    body: JSON.stringify(reasoningPlan ? reasoning.applyToBody({ ...body, model, stream: true, stream_options: { include_usage: true } }, reasoningPlan) : { ...body, model, stream: true, stream_options: { include_usage: true } }),
     signal: AbortSignal.timeout(120000)
   });
   if (!upstream.ok) {
@@ -245,7 +263,7 @@ async function handleStreaming({ res, started, body, userText, decision, tier, m
   cacheSet(cacheKey, buildCompletion({ id, created, model, content: acc, promptTokens, completionTokens }));
   const cuLive = extractCacheUsage(usage);
   const livePrefix = prefixCacheSavings({ model, tier, cachedInputTokens: cuLive.cachedInputTokens, writeInputTokens: cuLive.writeInputTokens });
-  const mLive = meterAndLog({ started, mode: "live", model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: acc, prefixCache: livePrefix });
+  const mLive = meterAndLog({ started, mode: "live", model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: acc, prefixCache: livePrefix, reasoning: finalizeReasoning(reasoningInfo, tier, usage) });
   budget.commit(reservation, mLive.actual.costUsd); if (reservation) reservation.committed = true;
   verify.maybeVerify({ rec: mLive.rec, userText, answer: acc, body, completion: buildCompletion({ id, created, model, content: acc, promptTokens, completionTokens }) });
 }
@@ -275,7 +293,23 @@ app.post("/v1/chat/completions", async (req, res) => {
       routing = verify.gate(decision, floor);
       if (!routing.routeSmall) { tier = "large"; qualityEscalated = true; }
     }
-    const model = routed ? selectModel(tier) : (body.model || selectModel(tier));
+    let model = routed ? selectModel(tier) : (body.model || selectModel(tier));
+
+    // 1b) reasoning-budget control (savings-hierarchy #3). Cap thinking budget on
+    // reasoning models; optionally downgrade reasoning->standard for simple prompts
+    // (a quality-risk decision, gated on the classifier's small-tier verdict).
+    let reasoningInfo = null, reasoningPlan = null;
+    if (reasoning.isReasoning(model)) {
+      reasoningPlan = reasoning.planFor(model, decision, req.get("x-joule-reasoning-effort"));
+      const base = { model, family: reasoningPlan.spec.family, effort: reasoningPlan.effort, capTokens: reasoningPlan.capTokens, uncappedTokens: reasoningPlan.uncappedTokens };
+      if (config.reasoning.downgradeEnabled && decision.tier === "small") {
+        model = config.reasoning.standardModel;                 // verified small-tier downgrade
+        reasoningInfo = { ...base, downgraded: true };
+        reasoningPlan = null;                                    // no budget to inject on a standard model
+      } else {
+        reasoningInfo = { ...base, downgraded: false };
+      }
+    }
 
     // 2) cache
     const cacheKey = model + "::" + norm(userText);
@@ -287,11 +321,11 @@ app.post("/v1/chat/completions", async (req, res) => {
       sessionId: session, estCostUsd: estimateRequestCost(model, tier, userText),
       maxCostUsd: parseFloat(req.get("x-joule-max-cost")), now: started
     });
-    if (!reservation.ok) return res.status(402).json({ error: { message: reservation.message, budget: reservation.detail } });
+    if (!reservation.ok) return res.status(reservation.status || 429).json({ error: { message: reservation.message, budget: reservation.detail } });
 
     // streaming branch — SSE out, metered via the store (not response headers)
     if (body.stream === true) {
-      return await handleStreaming({ res, started, body, userText, decision, tier, model, cacheKey, grid, session, qualityEscalated, routing, reservation });
+      return await handleStreaming({ res, started, body, userText, decision, tier, model, cacheKey, grid, session, qualityEscalated, routing, reservation, reasoningInfo, reasoningPlan });
     }
 
     const cachedCompletion = cacheGet(cacheKey);
@@ -341,7 +375,8 @@ app.post("/v1/chat/completions", async (req, res) => {
       const upstream = await fetch(config.upstreamBaseUrl + "/chat/completions", {
         method: "POST",
         headers: { "content-type": "application/json", authorization: "Bearer " + config.upstreamApiKey },
-        body: JSON.stringify({ ...body, model }),   // forwards cache_control / prompt-cache hints unmodified
+        // forwards cache_control / prompt-cache hints unmodified; injects a capped thinking budget on reasoning models
+        body: JSON.stringify(reasoningPlan ? reasoning.applyToBody({ ...body, model }, reasoningPlan) : { ...body, model }),
         signal: AbortSignal.timeout(120000)
       });
       const data = await upstream.json();
@@ -361,7 +396,8 @@ app.post("/v1/chat/completions", async (req, res) => {
     if (mode !== "cache" && mode !== "semantic_cache") cacheSet(cacheKey, completion);
 
     // 3) meter + 4) log (shared with the streaming path)
-    const m = meterAndLog({ started, mode, model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: completion.choices?.[0]?.message?.content || "", prefixCache, semantic });
+    const latencyTolerant = /^(1|true|yes)$/i.test(req.get("x-joule-latency-tolerant") || "");
+    const m = meterAndLog({ started, mode, model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: completion.choices?.[0]?.message?.content || "", prefixCache, semantic, reasoning: finalizeReasoning(reasoningInfo, tier, completion.usage), batch: (latencyTolerant && mode !== "cache") ? { discount: config.batch.discount } : undefined });
     budget.commit(reservation, m.actual.costUsd); reservation.committed = true; // reconcile reservation to actual spend
 
     // 5) expose metrics on headers (drop-in clients still get a clean OpenAI body)
@@ -502,6 +538,7 @@ app.get("/api/stats", async (_req, res) => {
     deployment: deploymentBlock(),
     cache: cacheBlock(totals),
     batch: batchBlock(totals),
+    reasoning: reasoningBlock(totals),
     budget: budget.stats(),
     config: {
       dryRun: config.dryRun,
@@ -536,6 +573,7 @@ app.get("/api/summary", (req, res) => {
   sum.quality = qualityBlock(sum.totals);
   sum.cache = cacheBlock(sum.totals);
   sum.batch = batchBlock(sum.totals);
+  sum.reasoning = reasoningBlock(sum.totals);
   res.json(sum);
 });
 
@@ -563,6 +601,21 @@ app.get("/v1/batch/:id", (req, res) => {
   res.json({ id: job.id, status: job.status, count: job.count, completed: job.completed, error: job.error, totals: job.totals, results: job.status === "completed" ? job.results : undefined });
 });
 
+// Reasoning-budget control block. Capping the thinking budget is low quality risk;
+// a reasoning->standard downgrade is verified through the same conformal path as routing.
+function reasoningBlock(totals) {
+  const r = totals.reasoning;
+  return {
+    requests: r.requests, downgrades: r.downgrades,
+    reasoningTokens: r.reasoningTokens,
+    avgThinkingBudget: r.requests ? Math.round(r.reasoningTokens / r.requests) : 0,
+    savedTokens: r.savedTokens, savedUsd: r.savedUsd,
+    maxThinkingTokens: config.reasoning.maxThinkingTokens, defaultEffort: config.reasoning.defaultEffort,
+    downgradeEnabled: config.reasoning.downgradeEnabled,
+    note: "Reasoning tokens are GENERATED tokens (bill as output, count toward energy). Capping the thinking budget is low quality risk; downgrading a reasoning model to a standard one is a quality-risk decision, verified via the conformal path. Savings are labelled estimates (we don't run the uncapped variant)."
+  };
+}
+
 // Batch savings line + advisory (zero quality risk).
 function batchBlock(totals) {
   return {
@@ -572,6 +625,16 @@ function batchBlock(totals) {
     note: `Batch processing runs latency-tolerant work asynchronously at the provider batch discount (~${Math.round(config.batch.discount * 100)}% off) — ZERO quality risk (same model, same output). Submit via POST /v1/batch; savings reported on a separate line.`
   };
 }
+
+// Quantified cache advisory — actionable findings with before/after + $ impact (estimates).
+app.get("/api/advisory", (_req, res) => {
+  res.json(cacheadvice.advisory(store.all()));
+});
+
+// Budget definitions + live spend/remaining + terminated sessions + recent events.
+app.get("/api/budgets", (_req, res) => {
+  res.json({ ...budget.stats(), definitions: budget.budgets() });
+});
 
 // Cumulative ROI since day one — real logged data only; empty state when no history.
 app.get("/api/roi", (_req, res) => {
@@ -709,6 +772,7 @@ app.get("/api/report", (req, res) => {
     deployment: deploymentBlock(),  // mode, data/provider region, cross-border, retention, redaction
     cache: cacheBlock(totals),      // separate cache savings line (zero quality risk) + advisory
     batch: batchBlock(totals),      // batch-discount savings line (zero quality risk)
+    reasoning: reasoningBlock(totals), // reasoning-token capping / downgrade savings line
     budget: budget.stats(),         // limits, used, remaining, rejections (enforcement prevents overspend)
     methodology: {
       cost: "Exact: provider-returned token usage x configured per-model prices.",

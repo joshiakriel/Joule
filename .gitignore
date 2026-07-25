@@ -5,7 +5,10 @@ data/
 .DS_Store
 
 # Internal / business material — kept local, never pushed
-CLAUDE.md
+CLAUDE*.md
 Joule_MVP_agent_prompts*.md
 Joule_Investor_QA*.pdf
 *_agent_prompts*.md
+
+# stray root asset copies — canonical logos live in public/
+/Assets/

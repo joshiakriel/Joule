@@ -236,6 +236,51 @@ test("POST /v1/batch rejects an empty request list", async () => {
   assert.equal(res.status, 400);
 });
 
+test("GET /api/advisory returns quantified cache findings; X-Joule-Latency-Tolerant credits the batch line", async () => {
+  store.clear();
+  await post({ model: "auto", messages: [{ role: "user", content: "request id 123456789 at 2026-07-25T10:00 summarise" }] }); // hostile
+  const adv = await (await fetch(base + "/api/advisory")).json();
+  assert.ok(adv.requests >= 1);
+  assert.ok(adv.findings.find((f) => f.pattern === "dynamic-content-before-static"), "hostile finding present");
+  // latency-tolerant header records batch-eligible savings on the batch line
+  const before = (await (await fetch(base + "/api/stats")).json()).batch.count;
+  await post({ model: "auto", messages: [{ role: "user", content: "a latency tolerant job" }] }, { "x-joule-latency-tolerant": "true" });
+  const after = (await (await fetch(base + "/api/stats")).json()).batch.count;
+  assert.equal(after, before + 1, "batch-eligible request counted");
+});
+
+test("reasoning-budget control: caps a reasoning model and meters thinking tokens separately", async () => {
+  store.clear();
+  config.setOverrides({ modelLarge: "o3" }); // route complex prompts to a reasoning model
+  try {
+    const res = await post({ model: "auto", messages: [{ role: "user", content: "prove and analyse step by step, deriving the architecture trade-offs in depth" }] });
+    assert.equal(res.headers.get("x-joule-model"), "o3");
+    const r = (await (await fetch(base + "/api/stats")).json()).reasoning;
+    assert.equal(r.requests, 1, "reasoning request metered");
+    assert.ok(r.reasoningTokens > 0, "thinking tokens counted separately");
+    assert.ok(r.savedUsd >= 0);
+    assert.ok(r.avgThinkingBudget > 0);
+    const rec = (await (await fetch(base + "/api/stats")).json()).recent.find((x) => x.reasoning);
+    assert.equal(rec.reasoning.model, "o3");
+    assert.ok(rec.reasoning.capTokens <= config.reasoning.maxThinkingTokens, "budget capped");
+  } finally { config.clearOverrides(); }
+});
+
+test("reasoning->standard downgrade (opt-in) routes a simple prompt off the reasoning model", async () => {
+  store.clear();
+  config.setOverrides({ modelSmall: "o3" }); // small tier is a reasoning model
+  const savedDown = config.reasoning.downgradeEnabled, savedStd = config.reasoning.standardModel;
+  config.reasoning.downgradeEnabled = true; config.reasoning.standardModel = "gpt-4o-mini";
+  try {
+    const res = await post({ model: "auto", messages: [{ role: "user", content: "hi thanks" }] }); // simple -> small
+    assert.equal(res.headers.get("x-joule-model"), "gpt-4o-mini", "downgraded off the reasoning model");
+    const rec = (await (await fetch(base + "/api/stats")).json()).recent.find((x) => x.reasoning);
+    assert.equal(rec.reasoning.downgraded, true);
+    assert.ok(rec.reasoning.savedTokens > 0, "downgrade avoids reasoning tokens");
+    assert.equal(rec.reasoning.reasoningTokens, 0, "no thinking tokens on the standard model");
+  } finally { config.reasoning.downgradeEnabled = savedDown; config.reasoning.standardModel = savedStd; config.clearOverrides(); }
+});
+
 test("GET /metrics exposes Prometheus/OTel-compatible metrics from the real log", async () => {
   store.clear();
   await post({ model: "auto", messages: [{ role: "user", content: "summarise this briefly" }] });
@@ -249,13 +294,13 @@ test("GET /metrics exposes Prometheus/OTel-compatible metrics from the real log"
   assert.ok(health.otel && "otlpExport" in health.otel, "health reports otel status");
 });
 
-test("budget enforcement rejects an over-cap request (402) before any model call", async () => {
+test("budget enforcement rejects an over-cap request (429) before any model call", async () => {
   store.clear(); budget.reset();
   const saved = { ...config.budget };
   config.budget.enforce = true; config.budget.sessionUsd = 0.0001; // estimate exceeds this
   try {
     const capped = await post({ model: "auto", messages: [{ role: "user", content: "hello there please" }] }, { "x-joule-session": "cap-test" });
-    assert.equal(capped.status, 402, "over-cap session request is blocked");
+    assert.equal(capped.status, 429, "over-cap session request is blocked");
     const body = await capped.json();
     assert.equal(body.error.budget.scope, "session");
     const before = (await (await fetch(base + "/api/stats")).json()).totals.requests;
@@ -268,6 +313,31 @@ test("budget enforcement rejects an over-cap request (402) before any model call
     assert.equal(stats.budget.enforce, true);
     assert.equal(stats.totals.requests, before + 1, "only the allowed request was metered");
   } finally { Object.assign(config.budget, saved); budget.reset(); }
+});
+
+test("per-session call cap terminates a runaway session; other sessions are unaffected (isolation)", async () => {
+  store.clear(); budget.reset();
+  const saved = { ...config.budget };
+  config.budget.enforce = true; config.budget.maxCallsPerSession = 2;
+  try {
+    const msg = [{ role: "user", content: "hi thanks" }];
+    assert.equal((await post({ model: "auto", messages: msg }, { "x-joule-session": "runaway" })).status, 200);
+    assert.equal((await post({ model: "auto", messages: msg }, { "x-joule-session": "runaway" })).status, 200);
+    const blocked = await post({ model: "auto", messages: msg }, { "x-joule-session": "runaway" }); // 3rd call -> over cap
+    assert.equal(blocked.status, 429, "runaway session blocked after its call cap");
+    // a DIFFERENT session still works — isolation
+    assert.equal((await post({ model: "auto", messages: msg }, { "x-joule-session": "other" })).status, 200);
+    // and the runaway session is marked terminated
+    const b = await (await fetch(base + "/api/budgets")).json();
+    assert.ok(b.terminatedSessions.find((t) => t.id === "runaway"), "runaway session terminated");
+    assert.ok(b.events.length >= 1, "audit trail records the block");
+  } finally { Object.assign(config.budget, saved); budget.reset(); }
+});
+
+test("GET /api/budgets exposes definitions, spend and fail mode", async () => {
+  const b = await (await fetch(base + "/api/budgets")).json();
+  assert.ok("definitions" in b && "terminatedSessions" in b && "events" in b);
+  assert.ok(["fail_open", "fail_closed"].includes(b.failMode));
 });
 
 test("metering-only budget (enforce=false) flags would-be breaches but never blocks", async () => {

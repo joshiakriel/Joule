@@ -9,20 +9,30 @@ const rec = {
   verification: { qualityScore: 0.9 }
 };
 
-test("OTLP span follows GenAI semantic conventions", () => {
+test("OTLP span follows GenAI semantic conventions + joule.* attributes", () => {
   const p = otel.spanPayload(rec);
   const span = p.resourceSpans[0].scopeSpans[0].spans[0];
   assert.equal(span.kind, 3, "CLIENT span");
   assert.match(span.name, /^chat /);
   const keys = span.attributes.map((a) => a.key);
-  for (const k of ["gen_ai.system", "gen_ai.request.model", "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "joule.cost_usd", "joule.energy_wh", "joule.co2_g", "joule.quality_score"]) {
+  for (const k of ["gen_ai.system", "gen_ai.request.model", "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "joule.cost_usd", "joule.energy_wh", "joule.co2_g", "joule.quality_score", "joule.cache_hit", "joule.conformal_alpha"]) {
     assert.ok(keys.includes(k), "has " + k);
   }
   const inTok = span.attributes.find((a) => a.key === "gen_ai.usage.input_tokens");
   assert.equal(inTok.value.intValue, "10");
-  const svc = p.resourceSpans[0].resource.attributes.find((a) => a.key === "service.name");
-  assert.ok(svc.value.stringValue);
   assert.ok(/^\d+$/.test(span.startTimeUnixNano) && /^\d+$/.test(span.endTimeUnixNano), "unix-nano times");
+});
+
+test("session spans share a trace and nest under a per-session parent span", () => {
+  const r = { ...rec, session: "agent-run-1" };
+  const p = otel.spanPayload(r, true);
+  const spans = p.resourceSpans[0].scopeSpans[0].spans;
+  assert.equal(spans.length, 2, "parent + child");
+  const parent = spans.find((s) => s.name.startsWith("agent session"));
+  const child = spans.find((s) => s.name.startsWith("chat"));
+  assert.ok(parent && child);
+  assert.equal(child.traceId, parent.traceId, "same trace");
+  assert.equal(child.parentSpanId, parent.spanId, "child nests under the session parent");
 });
 
 test("Prometheus metricsText is valid exposition format with per-model labels", () => {

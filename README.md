@@ -219,10 +219,12 @@ Joule surfaces this as a **separate savings line** from routing:
   to the upstream unmodified; Joule reads the provider's **real returned usage** (cached vs
   cache-creation input tokens, OpenAI *and* Anthropic shapes) and computes prefix-cache savings
   **net of the cache-write premium** (`CACHE_READ_MULTIPLIER` / `CACHE_WRITE_MULTIPLIER`).
-- **Advisory** — because Joule sees every request, it reports the exact hit rate and prefix
-  reuse, warns when reuse is **below breakeven** (write premium > read savings), and flags
-  **cache-hostile prompt structure** (IDs/timestamps/UUIDs at the *front* bust the prefix) with a
-  fix: *move stable content to the front, variable data to the end.*
+- **Advisory** (`GET /api/advisory` + dashboard panel) — because Joule sees every request, it
+  produces **quantified findings**: cache-hostile prompt structure (IDs/timestamps/UUIDs at the
+  *front* bust the prefix) with an estimated **before→after hit rate and $ impact**, prompts below
+  the provider's minimum cacheable length, and a **below-breakeven** warning (write premium > read
+  savings). Estimates are labelled as estimates. `X-Joule-Latency-Tolerant: true` marks a sync
+  request batch-eligible and credits the batch savings line.
 
 Cache savings are kept on their own line in `/api/stats`, `/api/summary`, `/api/report` and the
 dashboard, distinct from routing savings, so each lever is independently attributable.
@@ -275,9 +277,42 @@ Joule plugs into existing observability stacks without pulling in the OpenTeleme
   `joule_cache_saved_usd_total`, `joule_quality_score`, `joule_budget_rejected_total`.
 - **OTLP span export** (opt-in: `OTEL_ENABLED=true` + `OTEL_EXPORTER_OTLP_ENDPOINT`) — each request
   emits an OTLP/HTTP JSON span following the **GenAI semantic conventions**
-  (`gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.input_tokens/output_tokens`, …) plus
-  `joule.*` cost / energy / carbon / quality attributes, POSTed to your collector off the serving
-  path. No endpoint configured → no-op.
+  (`gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.input_tokens/output_tokens`, …) plus our
+  differentiating `joule.*` attributes (tier, cost, energy, carbon, quality score, conformal alpha,
+  cache hit, reasoning tokens). **Agent sessions** (`X-Joule-Session`) share a trace id and nest
+  under a per-session **parent span** (agent run → child call spans). POSTed to your collector off
+  the serving path; no endpoint → no-op. Point it at **Datadog / Grafana Tempo / Honeycomb / any
+  OTLP `/v1/traces` backend** — it's standard OTLP JSON, so **no OpenTelemetry SDK dependency** is
+  required. (The `gen_ai.*` standard covers tokens/cost/latency but not quality — that evaluation
+  layer stays ours, under `joule.*`.)
+
+## Brand
+
+The dashboard uses the Joule identity on the existing dark petrol theme. Drop these files in
+`public/` to activate the logo (the header falls back gracefully to `logo-mark.png` then the inline
+SVG bolt if they're absent): `logo.png` (full lockup), `logo-mark.png` (bolt mark / apple-touch),
+`favicon.png` (32×32). Brand tokens (in `public/index.html`): primary accent **cyan `#33E3C7`**;
+secondary accent **brand blue `--brand-blue #2D87AE`**, used sparingly (secondary/report buttons,
+link hovers, footer) — the UI is not repainted blue. Page title: *Joule — AI cost & carbon control plane*.
+
+## Reasoning-budget control (2026's biggest routing-tier lever)
+
+Reasoning models (o-series, DeepSeek-R1, extended-thinking Claude, Gemini thinking) emit **5–50×
+more tokens** per query, and accuracy plateaus past a certain depth — so **capping the thinking
+budget** usually preserves quality while cutting cost sharply.
+
+- **Detection + capped budget** — a config-driven table maps model-name patterns to their
+  thinking-budget param (OpenAI `reasoning_effort`, Anthropic `budget_tokens`, Gemini
+  `thinking_budget`, open models `max_thinking_tokens`). Joule picks a **complexity-aware** effort
+  (simple prompts think less), bounded by `REASONING_MAX_THINKING_TOKENS`, and injects it upstream.
+  Per-request override: `X-Joule-Reasoning-Effort: low|medium|high`.
+- **Reasoning → standard downgrade** (opt-in, `REASONING_DOWNGRADE_ENABLED`) — for prompts the
+  classifier deems simple, route off the reasoning model entirely. This is a **quality-risk**
+  decision, so it rides the **same conformal verification path** as tier routing.
+- **Separate metering** — thinking tokens are counted on their own line (they bill as output and
+  **count toward the decode-weighted energy model** — never treated as free). Savings from capping
+  and downgrades are labelled **estimates** (we don't run the uncapped variant). Surfaced in
+  `/api/stats`, `/api/report`, `/api/summary` and the dashboard.
 
 ## Budget enforcement (metering reports; enforcement prevents)
 
@@ -286,17 +321,21 @@ loop can burn the month's budget before anyone looks. Joule can **prevent** over
 model call, a request's cost is estimated and **reserved** against hierarchical budgets, then
 reconciled to the actual cost afterwards.
 
-- **Hierarchical caps** — `BUDGET_GLOBAL_USD`, `BUDGET_DAILY_USD`, and `BUDGET_SESSION_USD` (a
-  per-`X-Joule-Session` **agent-run cap**). A per-request hard cap can be set with the
-  `X-Joule-Max-Cost` header.
-- **Reservation before the call** — if a cap would be exceeded, the request is **rejected with
-  HTTP 402** and a clear body (`{scope, limit, current, wouldBe}`) — **no model is called**.
-- **Safe default: metering-only** — with `BUDGET_ENFORCE=false` (default) nothing is blocked;
-  would-be breaches are counted (`wouldReject`) so you can right-size caps before turning
-  enforcement on. Committed spend is seeded from the request log, so budgets survive restarts.
+- **Hierarchical caps** — `BUDGET_GLOBAL_USD`, `BUDGET_DAILY_USD`, `BUDGET_SESSION_USD`
+  (per-`X-Joule-Session` **agent-run cap**), `MAX_CALLS_PER_SESSION`, plus optional named budgets
+  (`BUDGET_DEFS`, scope/limit/`action: warn|throttle|block`). A per-request hard cap: `X-Joule-Max-Cost`.
+- **Reservation before the call** — if a *block* cap would be exceeded, the request is **rejected
+  with HTTP 429** and a machine-readable body (`{scope, limit, spent, wouldBe, resetAt}`) — **no
+  model is called**. A session that breaches a block cap (cost or call count) is **terminated** —
+  its later calls are rejected immediately, while **other sessions continue unaffected** (isolation).
+- **Safe default: metering-only** — `BUDGET_ENFORCE=false` (default) blocks nothing; would-be
+  breaches are counted (`wouldReject`). Committed spend is seeded from the log (survives restarts).
+- **Fail-open by default** — `BUDGET_FAIL_MODE=fail_open`: if the budget engine errors it allows
+  traffic and logs loudly, so a store hiccup never takes down production; `fail_closed` rejects.
 
-Surfaced in `/api/stats`, `/api/report`, and a dashboard **Budget** panel (caps, used today/all-time,
-remaining, and blocked/would-block counts).
+Surfaced in `/api/stats`, **`GET /api/budgets`** (definitions, spend, remaining, terminated sessions,
+event audit trail), `/api/report`, and a dashboard **Budget** panel (caps, used/remaining,
+blocked counts, terminated sessions).
 
 ## ROI since day one
 
