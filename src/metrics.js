@@ -52,4 +52,19 @@ function compute({ model, tier, promptTokens, completionTokens, gPerKwh, cached 
   return { actual, baseline, saved, totalTokens };
 }
 
-module.exports = { compute };
+/**
+ * Provider PREFIX-cache savings (Layer 1) — computed from the provider's REAL
+ * returned usage (cached vs cache-creation input tokens). Zero quality risk.
+ * netSavedUsd = read savings − cache-write premium (kept honest).
+ */
+function prefixCacheSavings({ model, tier, cachedInputTokens = 0, writeInputTokens = 0 }) {
+  const p = config.priceFor(model, tier);
+  const readSavedUsd = (cachedInputTokens / 1e6) * p.in * (1 - config.cache.readMultiplier);
+  const writePremiumUsd = (writeInputTokens / 1e6) * p.in * Math.max(0, config.cache.writeMultiplier - 1);
+  return {
+    cachedTokens: cachedInputTokens, writeTokens: writeInputTokens,
+    savedUsd: readSavedUsd, writePremiumUsd, netSavedUsd: readSavedUsd - writePremiumUsd
+  };
+}
+
+module.exports = { compute, prefixCacheSavings };

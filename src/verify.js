@@ -266,7 +266,7 @@ async function runVerification(ctx) {
 // Sample this request and verify in the BACKGROUND. Never blocks the response.
 function maybeVerify(ctx) {
   const rec = ctx && ctx.rec;
-  if (!opts.enabled || !rec || rec.tier !== "small" || rec.mode === "cache") return;
+  if (!opts.enabled || !rec || rec.tier !== "small" || rec.mode === "cache" || rec.mode === "semantic_cache") return;
   const sample = opts.sampleRate >= 1 || rng() < opts.sampleRate;
   if (!sample) return;
   sampledCount++; inFlight++;

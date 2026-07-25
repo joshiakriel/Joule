@@ -105,7 +105,13 @@ function accumulate(rs) {
     energyWh: { actual: 0, baseline: 0, saved: 0 },
     carbonG: { actual: 0, baseline: 0, saved: 0 },
     verified: 0,                                      // records with a verification result
-    verifyCost: { costUsd: 0, energyWh: 0, carbonG: 0, tokens: 0 }
+    verifyCost: { costUsd: 0, energyWh: 0, carbonG: 0, tokens: 0 },
+    // Cache is a SEPARATE savings line from routing (zero quality risk).
+    cacheSavedUsd: 0,                                 // saved by our exact-response cache
+    routingSavedUsd: 0,                               // saved by model routing (non-cache, non-semantic)
+    semantic: { hits: 0, savedUsd: 0, embedCostUsd: 0, netSavedUsd: 0 }, // Layer-2 semantic cache line
+    prefixCache: { cachedTokens: 0, writeTokens: 0, savedUsd: 0, writePremiumUsd: 0, netSavedUsd: 0 },
+    hostile: 0                                         // cache-hostile prompt structures
   };
   let qSum = 0;
   for (const r of rs) {
@@ -115,6 +121,19 @@ function accumulate(rs) {
     t.cost.actual += r.actual.costUsd; t.cost.baseline += r.baseline.costUsd; t.cost.saved += r.saved.costUsd;
     t.energyWh.actual += r.actual.energyWh; t.energyWh.baseline += r.baseline.energyWh; t.energyWh.saved += r.saved.energyWh;
     t.carbonG.actual += r.actual.carbonG; t.carbonG.baseline += r.baseline.carbonG; t.carbonG.saved += r.saved.carbonG;
+    if (r.cached) t.cacheSavedUsd += r.saved.costUsd;
+    else if (r.mode === "semantic_cache") {
+      t.semantic.hits++; t.semantic.savedUsd += r.saved.costUsd;
+      const sc = r.semantic || {}; t.semantic.embedCostUsd += sc.embedCostUsd || 0;
+      t.semantic.netSavedUsd += (sc.netSavedUsd != null ? sc.netSavedUsd : r.saved.costUsd - (sc.embedCostUsd || 0));
+    } else t.routingSavedUsd += r.saved.costUsd;
+    if (r.cacheHostile) t.hostile++;
+    if (r.prefixCache) {
+      const pc = r.prefixCache;
+      t.prefixCache.cachedTokens += pc.cachedTokens || 0; t.prefixCache.writeTokens += pc.writeTokens || 0;
+      t.prefixCache.savedUsd += pc.savedUsd || 0; t.prefixCache.writePremiumUsd += pc.writePremiumUsd || 0;
+      t.prefixCache.netSavedUsd += pc.netSavedUsd || 0;
+    }
     if (r.verification) {
       t.verified++; qSum += r.verification.qualityScore;
       const vc = r.verification.verifyCost || {};

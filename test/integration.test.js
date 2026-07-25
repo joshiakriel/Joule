@@ -15,6 +15,7 @@ const path = require("node:path");
 
 const store = require("../src/store");
 const verify = require("../src/verify");
+const semcache = require("../src/semcache");
 const app = require("../src/server");
 
 let server, base, tmpDir;
@@ -138,6 +139,44 @@ test("a session-tagged run groups into one labelled session with correct totals"
   assert.equal(sess.large, 1);
   assert.equal(sess.small, 2);
   assert.ok(sess.carbonG.actual > 0);
+});
+
+test("/api/stats + /api/report expose a cache block (separate line, advisory, zero-risk note)", async () => {
+  store.clear();
+  await post({ model: "auto", messages: [{ role: "user", content: "summarise this ticket in one line" }] });          // benign
+  await post({ model: "auto", messages: [{ role: "user", content: "request id 123456789 at 2026-07-25T10:00 do it" }] }); // hostile
+  const c = (await (await fetch(base + "/api/stats")).json()).cache;
+  assert.ok(c, "stats has a cache block");
+  assert.ok("prefixCache" in c && "netSavedUsd" in c.prefixCache, "prefix-cache savings line present");
+  assert.ok("routingSavedUsd" in c && "exactCacheSavedUsd" in c, "routing vs cache savings kept separate");
+  assert.ok(c.hostileRate > 0, "cache-hostile prompt detected");
+  assert.ok(Array.isArray(c.tips) && c.tips.length > 0, "advisory tips produced");
+  assert.match(c.note, /zero quality risk/i);
+  const rep = await (await fetch(base + "/api/report?format=json")).json();
+  assert.match(rep.methodology.cache, /separate line/i);
+  assert.ok(rep.cache && "prefixCache" in rep.cache);
+});
+
+test("semantic cache (opt-in) serves a near-duplicate and reports it on a separate, quality-risk line", async () => {
+  store.clear(); semcache.reset(); semcache.configure({ enabled: true, baseThreshold: 0.8, verifyRate: 1 });
+  try {
+    const first = await post({ model: "auto", messages: [{ role: "user", content: "summarise the quarterly sales report briefly" }] });
+    assert.notEqual(first.headers.get("x-joule-mode"), "semantic_cache", "first is a miss (stored)");
+    const second = await post({ model: "auto", messages: [{ role: "user", content: "summarise the quarterly sales report briefly please" }] });
+    assert.equal(second.headers.get("x-joule-mode"), "semantic_cache", "near-duplicate served from semantic cache");
+    await new Promise((r) => setTimeout(r, 10));
+    const c = (await (await fetch(base + "/api/stats")).json()).cache;
+    assert.equal(c.semantic.enabled, true);
+    assert.ok(c.semantic.hits >= 1, "semantic hit counted");
+    assert.ok("netSavedUsd" in c.semantic && "embedCostUsd" in c.semantic, "net-of-embedding savings reported");
+    assert.ok("realisedErrorRate" in c.semantic && "targetError" in c.semantic, "error rate tracked vs target");
+    assert.match(c.semantic.note, /quality risk/i);
+    // it must NOT be folded into the routing or exact-cache savings lines
+    const rep = await (await fetch(base + "/api/report?format=json")).json();
+    assert.ok("semantic" in rep.cache);
+  } finally {
+    semcache.reset(); // restore disabled state so later tests are unaffected
+  }
 });
 
 test("/api/roi reconciles with /api/summary and renders an empty state with no data", async () => {

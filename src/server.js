@@ -4,10 +4,38 @@ const express = require("express");
 const config = require("./config");
 const { classify, selectModel, tierForModel } = require("./router");
 const { getIntensity, invalidate: invalidateIntensity } = require("./carbon");
-const { compute } = require("./metrics");
+const { compute, prefixCacheSavings } = require("./metrics");
 const store = require("./store");
 const verify = require("./verify");
 const { redact } = require("./redact");
+const cacheadvice = require("./cacheadvice");
+const semcache = require("./semcache");
+
+// Live correctness probe for a served semantic hit: does a fresh answer to the NEW
+// prompt agree with the cached answer? (sampled, off the serving path)
+async function liveSemanticCorrect(userText, model, cachedAnswer) {
+  try {
+    const res = await fetch(config.upstreamBaseUrl + "/chat/completions", {
+      method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + config.upstreamApiKey },
+      body: JSON.stringify({ model, messages: [{ role: "user", content: userText }] }), signal: AbortSignal.timeout(60000)
+    });
+    if (!res.ok) return true; // can't tell -> don't penalise
+    const data = await res.json();
+    const fresh = data.choices?.[0]?.message?.content || "";
+    const [a, b] = await Promise.all([semcache.embed(cachedAnswer), semcache.embed(fresh)]);
+    return semcache.cosine(a, b) >= 0.85;
+  } catch { return true; }
+}
+
+// Provider PREFIX-cache usage — read the REAL cached vs cache-creation input tokens
+// from the upstream usage object. Supports OpenAI (prompt_tokens_details.cached_tokens)
+// and Anthropic-style (cache_read_input_tokens / cache_creation_input_tokens) shapes.
+function extractCacheUsage(usage) {
+  if (!usage) return { cachedInputTokens: 0, writeInputTokens: 0 };
+  const cached = usage.prompt_tokens_details?.cached_tokens ?? usage.cache_read_input_tokens ?? 0;
+  const write = usage.cache_creation_input_tokens ?? 0;
+  return { cachedInputTokens: Number(cached) || 0, writeInputTokens: Number(write) || 0 };
+}
 
 // Replace any live secret value with *** before a string leaves the process
 // (error messages, etc.). Secrets are never logged or returned by any endpoint.
@@ -68,16 +96,24 @@ const sessionOf = (req) => {
 // meter + log a request identically for streaming and non-streaming paths.
 // Returns the compute result with the stored record attached as `.rec` (so the
 // caller can hand it to the background verifier).
-function meterAndLog({ started, mode, model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText, completionText }) {
-  const m = compute({ model, tier, promptTokens, completionTokens, gPerKwh: grid.gPerKwh, cached: mode === "cache" });
+function meterAndLog({ started, mode, model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText, completionText, prefixCache, semantic }) {
+  // A semantic hit serves a stored answer, so the model recompute is avoided (cache-like);
+  // its embedding cost is tracked separately on the semantic savings line.
+  const m = compute({ model, tier, promptTokens, completionTokens, gPerKwh: grid.gPerKwh, cached: mode === "cache" || mode === "semantic_cache" });
   const rec = {
     ts: new Date().toISOString(), mode, cached: mode === "cache",
     model, tier, signals: decision.signals, confidence: decision.confidence,
     promptTokens, completionTokens, totalTokens: m.totalTokens,
     actual: m.actual, baseline: m.baseline, saved: m.saved,
     grid, latencyMs: Date.now() - started, session: session || null,
-    qualityEscalated: Boolean(qualityEscalated), routing: routing || null
+    qualityEscalated: Boolean(qualityEscalated), routing: routing || null,
+    // Layer-1 cache: provider prefix-cache savings (from real usage) + hostile-structure flag
+    prefixCache: prefixCache || null,
+    cacheHostile: cacheadvice.analyzePrompt(promptText || "").hostile,
+    // Layer-2 semantic cache (quality risk — separate line)
+    semantic: semantic || null
   };
+  if (semantic) rec.semantic.netSavedUsd = m.saved.costUsd - (semantic.embedCostUsd || 0);
   // Retention is OFF by default: prompt/response TEXT is persisted only when
   // LOG_PROMPTS=true, and PII-redacted first when PII_REDACT=true.
   if (config.logPrompts) {
@@ -135,7 +171,8 @@ async function handleStreaming({ res, started, body, userText, decision, tier, m
     const promptTokens = estTokens(userText);
     const completionTokens = estTokens(answer);
     cacheSet(cacheKey, buildCompletion({ id, created, model, content: answer, promptTokens, completionTokens }));
-    const mDry = meterAndLog({ started, mode: "dry_run", model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: answer });
+    const dryPrefix = prefixCacheSavings({ model, tier, cachedInputTokens: Math.round(promptTokens * config.cache.dryRunPrefixRate), writeInputTokens: 0 });
+    const mDry = meterAndLog({ started, mode: "dry_run", model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: answer, prefixCache: dryPrefix });
     verify.maybeVerify({ rec: mDry.rec, userText, answer, body });
     return;
   }
@@ -188,7 +225,9 @@ async function handleStreaming({ res, started, body, userText, decision, tier, m
   const promptTokens = usage?.prompt_tokens ?? estTokens(userText);
   const completionTokens = usage?.completion_tokens ?? estTokens(acc);
   cacheSet(cacheKey, buildCompletion({ id, created, model, content: acc, promptTokens, completionTokens }));
-  const mLive = meterAndLog({ started, mode: "live", model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: acc });
+  const cuLive = extractCacheUsage(usage);
+  const livePrefix = prefixCacheSavings({ model, tier, cachedInputTokens: cuLive.cachedInputTokens, writeInputTokens: cuLive.writeInputTokens });
+  const mLive = meterAndLog({ started, mode: "live", model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: acc, prefixCache: livePrefix });
   verify.maybeVerify({ rec: mLive.rec, userText, answer: acc, body, completion: buildCompletion({ id, created, model, content: acc, promptTokens, completionTokens }) });
 }
 
@@ -228,13 +267,29 @@ app.post("/v1/chat/completions", async (req, res) => {
     }
 
     const cachedCompletion = cacheGet(cacheKey);
-    let completion, promptTokens, completionTokens, mode;
+    let completion, promptTokens, completionTokens, mode, prefixCache = null, semantic = null;
+
+    // Layer-2 semantic cache — ONLY on a Layer-1 (exact) miss, so hits never embed.
+    let semLookup = null;
+    if (!cachedCompletion && semcache.enabled()) {
+      try { semLookup = await semcache.lookup(model, userText); } catch { semLookup = null; }
+    }
 
     if (cachedCompletion) {
       completion = cachedCompletion;
       promptTokens = completion.usage?.prompt_tokens ?? estTokens(userText);
       completionTokens = completion.usage?.completion_tokens ?? 0;
       mode = "cache";
+    } else if (semLookup && semLookup.entry) {
+      // semantic hit — serve the cached answer. QUALITY RISK: tracked on its own line,
+      // sampled hits are verified to learn per-entry thresholds and bound the error rate.
+      const e = semLookup.entry;
+      completion = e.completion;
+      promptTokens = e.promptTokens; completionTokens = e.completionTokens;
+      mode = "semantic_cache";
+      semantic = { sim: semLookup.sim, threshold: e.threshold, embedCostUsd: (estTokens(userText) / 1e6) * config.semanticCache.embedPricePerM };
+      const answer = e.completion.choices?.[0]?.message?.content || "";
+      semcache.onServe(e, semLookup.sim, () => config.dryRun ? semcache.dryCorrect(semLookup.sim) : liveSemanticCorrect(userText, model, answer));
     } else if (config.dryRun) {
       // full pipeline, synthesized answer — clearly labelled, no external call
       const answer = `【dry-run】 routed to ${model} (${tier}). Set DRY_RUN=false and UPSTREAM_API_KEY to make real calls.`;
@@ -246,6 +301,9 @@ app.post("/v1/chat/completions", async (req, res) => {
         usage: { prompt_tokens: promptTokens, completion_tokens: completionTokens, total_tokens: promptTokens + completionTokens }
       };
       mode = "dry_run";
+      // synthesize a plausible prefix-cache hit so the advisory is demoable offline
+      prefixCache = prefixCacheSavings({ model, tier, cachedInputTokens: Math.round(promptTokens * config.cache.dryRunPrefixRate), writeInputTokens: 0 });
+      if (semLookup) semcache.addEntry({ model, userText, vec: semLookup.vec, completion, promptTokens, completionTokens });
     } else {
       // real upstream call
       if (!config.upstreamApiKey) {
@@ -254,7 +312,7 @@ app.post("/v1/chat/completions", async (req, res) => {
       const upstream = await fetch(config.upstreamBaseUrl + "/chat/completions", {
         method: "POST",
         headers: { "content-type": "application/json", authorization: "Bearer " + config.upstreamApiKey },
-        body: JSON.stringify({ ...body, model }),
+        body: JSON.stringify({ ...body, model }),   // forwards cache_control / prompt-cache hints unmodified
         signal: AbortSignal.timeout(120000)
       });
       const data = await upstream.json();
@@ -263,13 +321,18 @@ app.post("/v1/chat/completions", async (req, res) => {
       promptTokens = data.usage?.prompt_tokens ?? estTokens(userText);
       completionTokens = data.usage?.completion_tokens ?? estTokens(JSON.stringify(data.choices?.[0]?.message?.content || ""));
       mode = "live";
+      // real prefix-cache savings from the provider's returned usage
+      const cu = extractCacheUsage(data.usage);
+      prefixCache = prefixCacheSavings({ model, tier, cachedInputTokens: cu.cachedInputTokens, writeInputTokens: cu.writeInputTokens });
+      if (semLookup) semcache.addEntry({ model, userText, vec: semLookup.vec, completion, promptTokens, completionTokens });
     }
 
-    // populate cache for any freshly-generated completion (dry_run or live)
-    if (mode !== "cache") cacheSet(cacheKey, completion);
+    // populate the exact cache for freshly-generated completions only (never for a
+    // semantic hit — that would store one question's answer under another's key)
+    if (mode !== "cache" && mode !== "semantic_cache") cacheSet(cacheKey, completion);
 
     // 3) meter + 4) log (shared with the streaming path)
-    const m = meterAndLog({ started, mode, model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: completion.choices?.[0]?.message?.content || "" });
+    const m = meterAndLog({ started, mode, model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: completion.choices?.[0]?.message?.content || "", prefixCache, semantic });
 
     // 5) expose metrics on headers (drop-in clients still get a clean OpenAI body)
     res.set({
@@ -327,12 +390,43 @@ function deploymentBlock() {
   };
 }
 
+// Cache advisory + separate savings line (Layer 1). Prefix/exact caching is ZERO
+// quality risk; savings are NET of the cache-write premium.
+function cacheBlock(totals) {
+  const req = totals.requests || 0;
+  const pc = totals.prefixCache;
+  const exactHitRate = req ? totals.cacheHits / req : 0;
+  const prefixReuse = (pc.cachedTokens + pc.writeTokens) ? pc.cachedTokens / (pc.cachedTokens + pc.writeTokens) : 0;
+  const breakevenHitRate = cacheadvice.breakevenHitRate();
+  const belowBreakeven = pc.writeTokens > 0 && prefixReuse < breakevenHitRate;
+  const hostileRate = req ? totals.hostile / req : 0;
+  const stats = { requests: req, exactHits: totals.cacheHits, exactHitRate, prefixReuse, breakevenHitRate, belowBreakeven, hostileRate };
+  const sc = semcache.stats();
+  return {
+    ...stats,
+    exactCacheSavedUsd: totals.cacheSavedUsd,      // separate from routing savings
+    routingSavedUsd: totals.routingSavedUsd,
+    prefixCache: pc,                                // {cachedTokens, writeTokens, savedUsd, writePremiumUsd, netSavedUsd}
+    tips: cacheadvice.tips(stats),
+    note: "Prefix/exact caching is ZERO quality risk — the model recomputes nothing, output is unchanged. Savings are NET of the cache-write premium and kept on a separate line from routing.",
+    // Layer-2 semantic cache — a SEPARATE, quality-RISKY line (opt-in).
+    semantic: {
+      enabled: sc.enabled, entries: sc.entries, hits: totals.semantic.hits,
+      savedUsd: totals.semantic.savedUsd, embedCostUsd: totals.semantic.embedCostUsd, netSavedUsd: totals.semantic.netSavedUsd,
+      realisedErrorRate: sc.realisedErrorRate, targetError: sc.targetError, verified: sc.verified,
+      avgThreshold: sc.avgThreshold, baseThreshold: sc.baseThreshold,
+      note: "Semantic caching CAN return a different question's answer — a genuine quality risk, NOT risk-free. Per-entry thresholds are learned to bound the realised error rate to the target; savings are NET of embedding spend."
+    }
+  };
+}
+
 // ---- dashboard data ----
 app.get("/api/stats", async (_req, res) => {
   const grid = await getIntensity();
   const totals = store.aggregate();
   res.json({
     deployment: deploymentBlock(),
+    cache: cacheBlock(totals),
     config: {
       dryRun: config.dryRun,
       routingEnabled: config.routingEnabled,
@@ -364,6 +458,7 @@ function parseFilter(q) {
 app.get("/api/summary", (req, res) => {
   const sum = store.summary(parseFilter(req.query));
   sum.quality = qualityBlock(sum.totals);
+  sum.cache = cacheBlock(sum.totals);
   res.json(sum);
 });
 
@@ -507,10 +602,12 @@ app.get("/api/report", (req, res) => {
     generatedAt: new Date().toISOString(),
     period,
     deployment: deploymentBlock(),  // mode, data/provider region, cross-border, retention, redaction
+    cache: cacheBlock(totals),      // separate cache savings line (zero quality risk) + advisory
     methodology: {
       cost: "Exact: provider-returned token usage x configured per-model prices.",
       energy: "Estimated, DECODE-WEIGHTED: base[tier] + perKTokOut[tier] x (completion_tokens/1000) + perKTokIn[tier] x (prompt_tokens/1000), with perKTokIn an order of magnitude below perKTokOut. Measurement studies show inference energy is dominated by the decode phase — near-zero correlation with prompt length, scaling with tokens generated. Anchored to GPU characterisation (ML.ENERGY / Zeus / TokenPowerBench methodology) with IEA 'Energy & AI' for order-of-magnitude sanity. Configurable in src/config.js.",
       carbon: "energy(kWh) x grid carbon intensity (gCO2/kWh) from Electricity Maps, aligned to GHG Protocol Scope 2 (location-based).",
+      cache: "Cache savings are a SEPARATE line from routing and carry ZERO quality risk — prefix/exact caching makes the model recompute nothing, so output is byte-identical. Prefix-cache savings are computed from the provider's REAL returned usage (cached vs cache-creation input tokens) and reported NET of the cache-write premium; a breakeven-reuse warning fires when the write premium would exceed read savings. (Semantic caching, which can return a different question's answer and is NOT risk-free, is a separate opt-in layer reported on its own line.)",
       verification: `Quality gating is CALIBRATED + CONFORMAL. A cheap per-request routing signal (router margin, no extra model call) is mapped to a probability of acceptability by isotonic regression (calibration set n=${q.calibration.n}, ECE=${q.calibration.ece == null ? "n/a" : q.calibration.ece.toFixed(3)}); a distribution-free conformal threshold bounds the probability of unacceptable degradation by alpha=${q.conformal.alpha}. The bound is MARGINAL (population-level), NOT a per-query guarantee, and distribution shift can violate it — always read n and alpha with any figure. Labels come from a SAMPLED (${Math.round(q.sampleRate * 100)}%) reference re-run + judge PANEL (${q.judgeModels.join(", ")}) with randomised answer order and agreement reporting; the judge is fallible and only LABELS calibration data, it does not gate live traffic. Below MIN_CALIBRATION_N=${q.calibration.minN} no guarantee is stated. Verification spends real tokens; net = routing savings − that overhead. References: ML.ENERGY/Zeus/TokenPowerBench (energy), FrugalGPT → Hybrid LLM (ICLR 2024) → conformal risk control (gating).`,
       standardsAlignment: ["GHG Protocol Scope 2 (location-based)", "SCI — Software Carbon Intensity (ISO/IEC 21031)"]
     },

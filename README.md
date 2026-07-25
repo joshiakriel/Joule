@@ -208,6 +208,43 @@ the store (aggregation + CSV), and an in-process integration pass over the proxy
 routing). Tests run in `DRY_RUN` against an isolated temp data dir, so they never touch
 `data/log.jsonl`.
 
+## Caching — the risk-free savings lever (Layer 1)
+
+Before routing (which carries quality risk), the cheapest savings come from **caching**, which
+carries **zero quality risk** — the model recomputes nothing, so the output is byte-identical.
+Joule surfaces this as a **separate savings line** from routing:
+
+- **Exact-response cache** — identical normalized prompts return the stored completion (free).
+- **Provider prefix caching passthrough** — `cache_control` / prompt-cache hints are forwarded
+  to the upstream unmodified; Joule reads the provider's **real returned usage** (cached vs
+  cache-creation input tokens, OpenAI *and* Anthropic shapes) and computes prefix-cache savings
+  **net of the cache-write premium** (`CACHE_READ_MULTIPLIER` / `CACHE_WRITE_MULTIPLIER`).
+- **Advisory** — because Joule sees every request, it reports the exact hit rate and prefix
+  reuse, warns when reuse is **below breakeven** (write premium > read savings), and flags
+  **cache-hostile prompt structure** (IDs/timestamps/UUIDs at the *front* bust the prefix) with a
+  fix: *move stable content to the front, variable data to the end.*
+
+Cache savings are kept on their own line in `/api/stats`, `/api/summary`, `/api/report` and the
+dashboard, distinct from routing savings, so each lever is independently attributable.
+
+### Layer 2 — semantic cache (opt-in, `SEMANTIC_CACHE_ENABLED=true`)
+
+Semantic caching returns a *semantically similar* (not identical) prompt's answer. Unlike
+prefix/exact caching it **can return a different question's answer — a genuine quality risk, not
+risk-free** — so Joule treats it as such and reports it on its **own** line:
+
+- Runs **only on a Layer-1 miss**, so exact/prefix hits never pay the embedding cost. Embeddings
+  are cached — an identical prompt is never re-embedded.
+- **Per-entry learned thresholds** (vCache-style), not one global cosine cutoff: it starts
+  conservative (`SEMANTIC_CACHE_BASE_THRESHOLD`), a sample of served hits is verified, and when a
+  served answer is wrong that entry's threshold is **raised above the offending similarity**; if the
+  realised error rate exceeds `SEMANTIC_CACHE_TARGET_ERROR` it tightens globally.
+- The **realised error rate is tracked and reported** vs the target, and savings are reported
+  **net of embedding spend** — on a separate line from prefix/exact cache and from routing.
+
+It's **off by default**; enabling it adds one embedding call per Layer-1 miss (the documented,
+opt-in trade-off). Semantic caching is never described as risk-free.
+
 ## ROI since day one
 
 `GET /api/roi` and the dashboard's **ROI** card show savings as a compounding investment, not a

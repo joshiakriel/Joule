@@ -182,6 +182,21 @@ test("addVerification() attaches quality; aggregate() rolls up quality + net + v
   assert.ok(row.endsWith(",0.900"), "quality_score in CSV");
 });
 
+test("aggregate() keeps cache savings on a separate line from routing + sums prefix cache", () => {
+  reset();
+  const r1 = store.add(makeRec({ tier: "small", tokens: 100, actEnergy: 1, baseEnergy: 4 }));         // routing save
+  r1.prefixCache = { cachedTokens: 500, writeTokens: 0, savedUsd: 0.002, writePremiumUsd: 0, netSavedUsd: 0.002 };
+  r1.cacheHostile = true;
+  store.add(makeRec({ tier: "small", cached: true, tokens: 50, actEnergy: 0, baseEnergy: 5 }));         // cache save
+  const t = store.aggregate();
+  assert.ok(t.routingSavedUsd > 0, "routing savings tracked separately");
+  assert.ok(t.cacheSavedUsd > 0, "exact-cache savings tracked separately");
+  assert.ok(Math.abs((t.routingSavedUsd + t.cacheSavedUsd) - t.cost.saved) < 1e-9, "the two lines sum to total saved");
+  assert.equal(t.prefixCache.cachedTokens, 500);
+  assert.ok(Math.abs(t.prefixCache.netSavedUsd - 0.002) < 1e-12);
+  assert.equal(t.hostile, 1);
+});
+
 test("aggregate() qualityScore is null until a sample is verified (no fake 100%)", () => {
   reset();
   store.add(makeRec({ tier: "small", tokens: 100, actEnergy: 1, baseEnergy: 4 }));

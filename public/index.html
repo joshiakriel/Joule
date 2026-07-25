@@ -158,6 +158,8 @@
   .banner .flow{font-family:'JetBrains Mono',monospace;font-size:11px}
   .banner .tag{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:2px 7px}
   .roi-head{font-size:14px;color:var(--text);line-height:1.5}
+  .tips{margin:10px 0 0;padding-left:18px;font-size:12px;color:var(--muted);line-height:1.6}
+  .tips li{margin-bottom:4px}
 </style>
 </head>
 <body>
@@ -246,6 +248,11 @@
     <div class="chart-lgnd"><span><i class="a"></i>Joule (actual)</span><span><i class="b"></i>always-large baseline</span></div>
     <div class="chart" id="chart"></div>
     <div class="chart-x"><span id="chartFrom">—</span><span id="chartTo">now</span></div>
+  </div>
+
+  <div class="card" id="cacheCard" style="margin-top:18px">
+    <h2>Cache &amp; advisory <span class="muted" style="text-transform:none;letter-spacing:0">— zero-quality-risk savings, ahead of routing in the stack</span></h2>
+    <div id="cacheBody"><div class="empty-log">No requests yet.</div></div>
   </div>
 
   <div class="card" id="roiCard" style="margin-top:18px">
@@ -488,6 +495,7 @@ async function refresh() {
     ' <span class="muted">— marginal bound, not a per-query guarantee</span>';
 
   renderChart(view.series, view.window);
+  renderCache(view.cache);
   renderSessions(view.sessions);
   renderModels(view.perModel);
   renderLog(view.recent);
@@ -556,6 +564,36 @@ function renderSessions(sessions) {
         '<td class="num muted">'+fmtMs(s.durationMs)+'</td>'+
         '<td class="mono muted" title="'+esc(new Date(s.to).toLocaleString())+'">'+relTime(s.to)+'</td></tr>';
     }).join("")+'</tbody></table></div>';
+}
+
+function renderCache(c) {
+  const box = $("cacheBody");
+  if (!c || !c.requests) { box.innerHTML = '<div class="empty-log">No requests yet.</div>'; return; }
+  const pc = c.prefixCache || { netSavedUsd: 0, savedUsd: 0, writePremiumUsd: 0 };
+  const pct = (x) => Math.round(x * 100) + "%";
+  let html = '<div class="netline">' +
+    'cache savings <span class="muted">(separate line from routing · zero quality risk)</span> — exact-response <b class="cyan">' + fmtUsd(c.exactCacheSavedUsd) + '</b> · prefix-cache net <b class="cyan">' + fmtUsd(pc.netSavedUsd) + '</b>' +
+    '<br>exact hit rate <b>' + pct(c.exactHitRate) + '</b> · prefix reuse <b>' + pct(c.prefixReuse) + '</b> (breakeven ' + pct(c.breakevenHitRate) +
+    (c.belowBreakeven ? ' <b class="q-warn">— below breakeven: write premium exceeds read savings</b>' : '') + ')' +
+    ' · cache-hostile prompts <b class="' + (c.hostileRate > 0.2 ? 'q-warn' : '') + '">' + pct(c.hostileRate) + '</b>' +
+    (pc.writePremiumUsd > 0 ? ('<br>prefix reads saved <b>' + fmtUsd(pc.savedUsd) + '</b> − write premium <b>' + fmtUsd(pc.writePremiumUsd) + '</b> = net <b>' + fmtUsd(pc.netSavedUsd) + '</b>') : '') +
+    '</div>';
+  // Layer-2 semantic cache — separate line, flagged as a QUALITY RISK
+  const sm = c.semantic;
+  if (sm && sm.enabled) {
+    const err = sm.realisedErrorRate == null ? '—' : pct(sm.realisedErrorRate);
+    const errCls = (sm.realisedErrorRate != null && sm.realisedErrorRate > sm.targetError) ? 'q-warn' : 'cyan';
+    const html2 =
+      '<div class="netline" style="margin-top:6px">' +
+      '<b class="q-warn">semantic cache (quality risk — not risk-free)</b> · ' + sm.hits + ' hit' + (sm.hits === 1 ? '' : 's') +
+      ' · net saved <b class="cyan">' + fmtUsd(sm.netSavedUsd) + '</b> <span class="muted">(after embedding ' + fmtUsd(sm.embedCostUsd) + ')</span>' +
+      '<br>realised error rate <b class="' + errCls + '">' + err + '</b> vs target ' + pct(sm.targetError) +
+      ' <span class="muted">(learned thresholds avg ' + (sm.avgThreshold != null ? sm.avgThreshold.toFixed(3) : '—') + ' · ' + sm.entries + ' entries · ' + sm.verified + ' verified)</span></div>';
+    box.innerHTML = html + html2 + (c.tips && c.tips.length ? '<ul class="tips">' + c.tips.map((t) => '<li>' + esc(t) + '</li>').join('') + '</ul>' : '');
+    return;
+  }
+  if (c.tips && c.tips.length) html += '<ul class="tips">' + c.tips.map((t) => '<li>' + esc(t) + '</li>').join('') + '</ul>';
+  box.innerHTML = html;
 }
 
 async function renderRoi() {

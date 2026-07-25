@@ -67,6 +67,36 @@ const config = {
   complexityThreshold: num(process.env.COMPLEXITY_THRESHOLD, 1), // score > threshold => large tier
   cacheTtlMs: num(process.env.CACHE_TTL_MS, 1000 * 60 * 30),
 
+  /**
+   * Caching economics — Layer 1: exact + provider-native PREFIX caching. Prefix/
+   * exact caching is ZERO quality risk (the model recomputes nothing; output is
+   * unchanged). Cached INPUT tokens cost `readMultiplier` of the input price; some
+   * providers charge a `writeMultiplier` premium to populate the cache (Anthropic
+   * ~1.25; OpenAI ~1.0). Savings are reported NET of that write premium.
+   */
+  cache: {
+    readMultiplier: num(process.env.CACHE_READ_MULTIPLIER, 0.5),   // OpenAI 0.5; Anthropic ~0.1
+    writeMultiplier: num(process.env.CACHE_WRITE_MULTIPLIER, 1.0),  // OpenAI 1.0; Anthropic ~1.25
+    dryRunPrefixRate: num(process.env.CACHE_DRYRUN_PREFIX_RATE, 0.5) // synthetic cached-prefix fraction in DRY_RUN (demo only)
+  },
+
+  /**
+   * Layer 2 — SEMANTIC cache (OPT-IN, default OFF). Unlike prefix/exact caching it
+   * can return a DIFFERENT question's answer, so it IS a genuine quality risk. We
+   * bound it: per-entry learned similarity thresholds (vCache-style) targeting a
+   * configurable error rate, the realised error rate tracked and reported, and
+   * savings reported NET of embedding spend. Runs ONLY on a Layer-1 miss.
+   */
+  semanticCache: {
+    enabled: bool(process.env.SEMANTIC_CACHE_ENABLED, false),
+    baseThreshold: num(process.env.SEMANTIC_CACHE_BASE_THRESHOLD, 0.92), // conservative cosine start
+    targetError: num(process.env.SEMANTIC_CACHE_TARGET_ERROR, 0.05),      // bound on served-answer error rate
+    verifyRate: num(process.env.SEMANTIC_CACHE_VERIFY_RATE, 0.25),         // fraction of hits sampled to learn thresholds
+    maxEntries: num(process.env.SEMANTIC_CACHE_MAX_ENTRIES, 500),
+    embeddingModel: process.env.EMBEDDING_MODEL || "text-embedding-3-small",
+    embedPricePerM: num(process.env.EMBEDDING_PRICE_PER_M, 0.02)          // USD per 1M embedding tokens
+  },
+
   // Carbon fallback (used when no EM token / API unreachable)
   fallbackIntensity: num(process.env.FALLBACK_INTENSITY, 450), // gCO2/kWh
 
