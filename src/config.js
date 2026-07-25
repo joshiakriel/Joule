@@ -63,6 +63,33 @@ const config = {
   // ROI view — monthly subscription used for net-of-fees + payback (0 => not shown)
   subscriptionCostMonthly: num(process.env.SUBSCRIPTION_COST_MONTHLY, 0),
 
+  /**
+   * OpenTelemetry GenAI interop. `/metrics` (Prometheus) is always available and
+   * dependency-free. OTLP/HTTP JSON span export (GenAI semantic conventions) is
+   * opt-in: set OTEL_EXPORTER_OTLP_ENDPOINT (+ OTEL_ENABLED) and each request emits
+   * a span to your collector. No OTel SDK dependency — spans are hand-built JSON.
+   */
+  otel: {
+    enabled: bool(process.env.OTEL_ENABLED, false),
+    endpoint: (process.env.OTEL_EXPORTER_OTLP_ENDPOINT || "").replace(/\/$/, ""),
+    serviceName: process.env.OTEL_SERVICE_NAME || "joule"
+  },
+
+  /**
+   * Budget enforcement — metering REPORTS; enforcement PREVENTS. A request's cost
+   * is estimated and RESERVED against hierarchical budgets BEFORE the model is
+   * called; if a cap would be exceeded and enforcement is on, the request is
+   * rejected (HTTP 402) and no model call is made. Default is metering-only
+   * (enforce=false): caps that would be breached are flagged, not blocked. 0 = no cap.
+   */
+  budget: {
+    enforce: bool(process.env.BUDGET_ENFORCE, false),
+    globalUsd: num(process.env.BUDGET_GLOBAL_USD, 0),
+    dailyUsd: num(process.env.BUDGET_DAILY_USD, 0),
+    sessionUsd: num(process.env.BUDGET_SESSION_USD, 0),           // per X-Joule-Session cap (agent-run cap)
+    assumedCompletionTokens: num(process.env.BUDGET_ASSUMED_COMPLETION_TOKENS, 500) // reservation estimate
+  },
+
   // Routing tunables (not runtime-configurable via the UI)
   complexityThreshold: num(process.env.COMPLEXITY_THRESHOLD, 1), // score > threshold => large tier
   cacheTtlMs: num(process.env.CACHE_TTL_MS, 1000 * 60 * 30),

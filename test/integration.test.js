@@ -16,6 +16,8 @@ const path = require("node:path");
 const store = require("../src/store");
 const verify = require("../src/verify");
 const semcache = require("../src/semcache");
+const budget = require("../src/budget");
+const config = require("../src/config");
 const app = require("../src/server");
 
 let server, base, tmpDir;
@@ -31,7 +33,7 @@ before(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "joule-int-"));
   store.init(tmpDir); // isolate: server + store now write here, not data/log.jsonl
   require("../src/calibrate").setDir(tmpDir);
-  verify.reset(); // clean verification/calibration state for the early tests
+  verify.reset(); budget.reset(); // clean verification + budget state for the early tests
   await new Promise((resolve) => { server = app.listen(0, resolve); });
   base = `http://localhost:${server.address().port}`;
 });
@@ -194,6 +196,53 @@ test("/api/roi reconciles with /api/summary and renders an empty state with no d
   assert.ok(Math.abs(cum - sum.totals.cost.saved) < 1e-9, "cumulative ROI saved == summary saved");
   assert.ok(Math.abs(roi.lifetime.savedCost - sum.totals.cost.saved) < 1e-9, "lifetime reconciles");
   assert.ok("netAfterFees" in roi.net, "net-of-fees exposed");
+});
+
+test("GET /metrics exposes Prometheus/OTel-compatible metrics from the real log", async () => {
+  store.clear();
+  await post({ model: "auto", messages: [{ role: "user", content: "summarise this briefly" }] });
+  const res = await fetch(base + "/metrics");
+  assert.match(res.headers.get("content-type") || "", /text\/plain/);
+  const text = await res.text();
+  assert.match(text, /# TYPE joule_requests_total counter/);
+  assert.match(text, /joule_requests_total\{model=".+",tier=".+"\} \d+/);
+  assert.match(text, /joule_cost_usd_total/);
+  const health = await (await fetch(base + "/api/health")).json();
+  assert.ok(health.otel && "otlpExport" in health.otel, "health reports otel status");
+});
+
+test("budget enforcement rejects an over-cap request (402) before any model call", async () => {
+  store.clear(); budget.reset();
+  const saved = { ...config.budget };
+  config.budget.enforce = true; config.budget.sessionUsd = 0.0001; // estimate exceeds this
+  try {
+    const capped = await post({ model: "auto", messages: [{ role: "user", content: "hello there please" }] }, { "x-joule-session": "cap-test" });
+    assert.equal(capped.status, 402, "over-cap session request is blocked");
+    const body = await capped.json();
+    assert.equal(body.error.budget.scope, "session");
+    const before = (await (await fetch(base + "/api/stats")).json()).totals.requests;
+    // a request WITHOUT that session is not affected by the per-session cap
+    const ok = await post({ model: "auto", messages: [{ role: "user", content: "hello there please" }] });
+    assert.equal(ok.status, 200);
+    // the blocked request never reached metering (no store record for it)
+    const stats = await (await fetch(base + "/api/stats")).json();
+    assert.ok(stats.budget.rejected >= 1, "rejection counted");
+    assert.equal(stats.budget.enforce, true);
+    assert.equal(stats.totals.requests, before + 1, "only the allowed request was metered");
+  } finally { Object.assign(config.budget, saved); budget.reset(); }
+});
+
+test("metering-only budget (enforce=false) flags would-be breaches but never blocks", async () => {
+  store.clear(); budget.reset();
+  const saved = { ...config.budget };
+  config.budget.enforce = false; config.budget.sessionUsd = 0.0001;
+  try {
+    const res = await post({ model: "auto", messages: [{ role: "user", content: "hello there please" }] }, { "x-joule-session": "flag-test" });
+    assert.equal(res.status, 200, "not blocked when enforcement is off");
+    const b = (await (await fetch(base + "/api/stats")).json()).budget;
+    assert.equal(b.rejected, 0);
+    assert.ok(b.wouldReject >= 1, "would-be breach flagged for reporting");
+  } finally { Object.assign(config.budget, saved); budget.reset(); }
 });
 
 test("POST /api/clear truly empties the store", async () => {

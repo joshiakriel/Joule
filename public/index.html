@@ -250,6 +250,11 @@
     <div class="chart-x"><span id="chartFrom">—</span><span id="chartTo">now</span></div>
   </div>
 
+  <div class="card" id="budgetCard" style="margin-top:18px;display:none">
+    <h2>Budget <span class="muted" style="text-transform:none;letter-spacing:0">— metering reports; enforcement prevents overspend</span></h2>
+    <div id="budgetBody"></div>
+  </div>
+
   <div class="card" id="cacheCard" style="margin-top:18px">
     <h2>Cache &amp; advisory <span class="muted" style="text-transform:none;letter-spacing:0">— zero-quality-risk savings, ahead of routing in the stack</span></h2>
     <div id="cacheBody"><div class="empty-log">No requests yet.</div></div>
@@ -412,6 +417,10 @@ async function refresh() {
   if (qv.safetyMode) pills.push(`<span class="pill safety"><span class="d"></span>SAFETY MODE · routing large</span>`);
   if (qv.drift && qv.drift.drift) pills.push(`<span class="pill safety"><span class="d"></span>DRIFT · recalibration needed</span>`);
   if (qv.guaranteeReady) pills.push(`<span class="pill ok"><span class="d"></span>verified · α=${qv.conformal.alpha} n=${qv.conformal.n}</span>`);
+  const bdg = meta.budget;
+  if (bdg && bdg.enforce) pills.push(`<span class="pill ok"><span class="d"></span>budget enforced</span>`);
+  if (bdg && bdg.rejected > 0) pills.push(`<span class="pill safety"><span class="d"></span>${bdg.rejected} over-budget blocked</span>`);
+  else if (bdg && bdg.wouldReject > 0) pills.push(`<span class="pill warn"><span class="d"></span>${bdg.wouldReject} would exceed budget</span>`);
   pills.push(`<span class="pill ${c.hasUpstreamKey ? "ok" : "warn"}"><span class="d"></span>${c.hasUpstreamKey ? "API key set" : "no API key"}</span>`);
   // grid pill — honest about provenance: live EM value vs. estimated fallback constant
   const gridPill = g.live
@@ -494,6 +503,7 @@ async function refresh() {
     ' · drift <b class="' + (drift.drift ? 'q-warn' : '') + '">' + esc((drift.status || "—")) + '</b>' +
     ' <span class="muted">— marginal bound, not a per-query guarantee</span>';
 
+  renderBudget(meta.budget);
   renderChart(view.series, view.window);
   renderCache(view.cache);
   renderSessions(view.sessions);
@@ -564,6 +574,25 @@ function renderSessions(sessions) {
         '<td class="num muted">'+fmtMs(s.durationMs)+'</td>'+
         '<td class="mono muted" title="'+esc(new Date(s.to).toLocaleString())+'">'+relTime(s.to)+'</td></tr>';
     }).join("")+'</tbody></table></div>';
+}
+
+function renderBudget(b) {
+  const card = $("budgetCard");
+  const hasLimits = b && (b.limits.globalUsd > 0 || b.limits.dailyUsd > 0 || b.limits.sessionUsd > 0);
+  if (!b || (!hasLimits && !b.enforce && !b.rejected && !b.wouldReject)) { card.style.display = "none"; return; }
+  card.style.display = "block";
+  const cap = (v) => v > 0 ? fmtUsd(v) : "—";
+  const rem = (v) => v == null ? "—" : fmtUsd(v);
+  const mode = b.enforce ? '<b class="cyan">enforcing</b> (rejects over-budget requests)' : '<b class="q-warn">metering only</b> (not blocking)';
+  $("budgetBody").innerHTML =
+    '<div class="netline">mode: ' + mode +
+    '<br>caps — global <b>' + cap(b.limits.globalUsd) + '</b> · daily <b>' + cap(b.limits.dailyUsd) + '</b> · per-session <b>' + cap(b.limits.sessionUsd) + '</b>' +
+    '<br>used — today <b>' + fmtUsd(b.used.today) + '</b> · all-time <b>' + fmtUsd(b.used.global) + '</b>' +
+    (b.remaining.today != null || b.remaining.global != null ? (' · remaining today <b>' + rem(b.remaining.today) + '</b> · global <b>' + rem(b.remaining.global) + '</b>') : '') +
+    '<br>' + (b.enforce
+      ? ('<b class="' + (b.rejected ? 'q-warn' : '') + '">' + b.rejected + '</b> request(s) blocked before any model call')
+      : ('<b class="' + (b.wouldReject ? 'q-warn' : '') + '">' + b.wouldReject + '</b> request(s) WOULD be blocked if enforcement were on')) +
+    '</div>';
 }
 
 function renderCache(c) {

@@ -245,6 +245,40 @@ risk-free** — so Joule treats it as such and reports it on its **own** line:
 It's **off by default**; enabling it adds one embedding call per Layer-1 miss (the documented,
 opt-in trade-off). Semantic caching is never described as risk-free.
 
+## OpenTelemetry / Prometheus interop
+
+Joule plugs into existing observability stacks without pulling in the OpenTelemetry SDK
+(minimal-deps rule):
+
+- **`GET /metrics`** — always on, dependency-free **Prometheus** exposition derived from the real
+  log: `joule_requests_total{model,tier}`, `joule_tokens_total`, `joule_cost_usd_total`,
+  `joule_energy_wh_total`, `joule_co2_grams_total`, `joule_cost_saved_usd_total`,
+  `joule_cache_saved_usd_total`, `joule_quality_score`, `joule_budget_rejected_total`.
+- **OTLP span export** (opt-in: `OTEL_ENABLED=true` + `OTEL_EXPORTER_OTLP_ENDPOINT`) — each request
+  emits an OTLP/HTTP JSON span following the **GenAI semantic conventions**
+  (`gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.input_tokens/output_tokens`, …) plus
+  `joule.*` cost / energy / carbon / quality attributes, POSTed to your collector off the serving
+  path. No endpoint configured → no-op.
+
+## Budget enforcement (metering reports; enforcement prevents)
+
+Dashboards tell you what you *already* spent. For unattended agents that's too late — a runaway
+loop can burn the month's budget before anyone looks. Joule can **prevent** overspend: before any
+model call, a request's cost is estimated and **reserved** against hierarchical budgets, then
+reconciled to the actual cost afterwards.
+
+- **Hierarchical caps** — `BUDGET_GLOBAL_USD`, `BUDGET_DAILY_USD`, and `BUDGET_SESSION_USD` (a
+  per-`X-Joule-Session` **agent-run cap**). A per-request hard cap can be set with the
+  `X-Joule-Max-Cost` header.
+- **Reservation before the call** — if a cap would be exceeded, the request is **rejected with
+  HTTP 402** and a clear body (`{scope, limit, current, wouldBe}`) — **no model is called**.
+- **Safe default: metering-only** — with `BUDGET_ENFORCE=false` (default) nothing is blocked;
+  would-be breaches are counted (`wouldReject`) so you can right-size caps before turning
+  enforcement on. Committed spend is seeded from the request log, so budgets survive restarts.
+
+Surfaced in `/api/stats`, `/api/report`, and a dashboard **Budget** panel (caps, used today/all-time,
+remaining, and blocked/would-block counts).
+
 ## ROI since day one
 
 `GET /api/roi` and the dashboard's **ROI** card show savings as a compounding investment, not a

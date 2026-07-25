@@ -10,6 +10,15 @@ const verify = require("./verify");
 const { redact } = require("./redact");
 const cacheadvice = require("./cacheadvice");
 const semcache = require("./semcache");
+const budget = require("./budget");
+const otel = require("./otel");
+
+// Estimate a request's cost BEFORE calling the model (prompt tokens + an assumed
+// completion length at the routed tier's price) — used for budget reservation.
+function estimateRequestCost(model, tier, userText) {
+  const p = config.priceFor(model, tier);
+  return (estTokens(userText) / 1e6) * p.in + (config.budget.assumedCompletionTokens / 1e6) * p.out;
+}
 
 // Live correctness probe for a served semantic hit: does a fresh answer to the NEW
 // prompt agree with the cached answer? (sampled, off the serving path)
@@ -49,6 +58,7 @@ function scrub(s) {
 
 store.init();
 verify.init();       // load calibration + migrate existing judge scores
+budget.init(store.all()); // seed committed spend from the log
 const app = express();
 app.use(express.json({ limit: "2mb" }));
 app.use(express.static(path.join(__dirname, "..", "public")));
@@ -121,6 +131,7 @@ function meterAndLog({ started, mode, model, tier, decision, grid, promptTokens,
     rec.completion = config.piiRedact ? redact(completionText || "") : (completionText || "");
   }
   m.rec = store.add(rec);
+  otel.emit(m.rec); // OTLP GenAI span (off-path, no-op unless configured)
   return m;
 }
 
@@ -147,7 +158,7 @@ function streamText(res, { id, created, model, content }) {
 // headers here (they're flushed before usage is known) — streamed requests are
 // metered via the store, so they still appear in /api/stats and /api/report.
 // ---------------------------------------------------------------------------
-async function handleStreaming({ res, started, body, userText, decision, tier, model, cacheKey, grid, session, qualityEscalated, routing }) {
+async function handleStreaming({ res, started, body, userText, decision, tier, model, cacheKey, grid, session, qualityEscalated, routing, reservation }) {
   const id = "joule-stream-" + started;
   const created = Math.floor(started / 1000);
 
@@ -159,7 +170,8 @@ async function handleStreaming({ res, started, body, userText, decision, tier, m
     streamText(res, { id, created, model, content });
     const promptTokens = cached.usage?.prompt_tokens ?? estTokens(userText);
     const completionTokens = cached.usage?.completion_tokens ?? estTokens(content);
-    meterAndLog({ started, mode: "cache", model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: content });
+    const mCache = meterAndLog({ started, mode: "cache", model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: content });
+    budget.commit(reservation, mCache.actual.costUsd); if (reservation) reservation.committed = true;
     return;
   }
 
@@ -173,12 +185,14 @@ async function handleStreaming({ res, started, body, userText, decision, tier, m
     cacheSet(cacheKey, buildCompletion({ id, created, model, content: answer, promptTokens, completionTokens }));
     const dryPrefix = prefixCacheSavings({ model, tier, cachedInputTokens: Math.round(promptTokens * config.cache.dryRunPrefixRate), writeInputTokens: 0 });
     const mDry = meterAndLog({ started, mode: "dry_run", model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: answer, prefixCache: dryPrefix });
+    budget.commit(reservation, mDry.actual.costUsd); if (reservation) reservation.committed = true;
     verify.maybeVerify({ rec: mDry.rec, userText, answer, body });
     return;
   }
 
   // live — forward with stream:true and pipe chunks through unmodified
   if (!config.upstreamApiKey) {
+    budget.release(reservation);
     return res.status(400).json({ error: { message: "UPSTREAM_API_KEY not set. Set it, or run with DRY_RUN=true to test the pipeline." } });
   }
   const upstream = await fetch(config.upstreamBaseUrl + "/chat/completions", {
@@ -189,6 +203,7 @@ async function handleStreaming({ res, started, body, userText, decision, tier, m
     signal: AbortSignal.timeout(120000)
   });
   if (!upstream.ok) {
+    budget.release(reservation);
     const data = await upstream.json().catch(() => ({ error: { message: "upstream error " + upstream.status } }));
     return res.status(upstream.status).json(data);
   }
@@ -228,6 +243,7 @@ async function handleStreaming({ res, started, body, userText, decision, tier, m
   const cuLive = extractCacheUsage(usage);
   const livePrefix = prefixCacheSavings({ model, tier, cachedInputTokens: cuLive.cachedInputTokens, writeInputTokens: cuLive.writeInputTokens });
   const mLive = meterAndLog({ started, mode: "live", model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: acc, prefixCache: livePrefix });
+  budget.commit(reservation, mLive.actual.costUsd); if (reservation) reservation.committed = true;
   verify.maybeVerify({ rec: mLive.rec, userText, answer: acc, body, completion: buildCompletion({ id, created, model, content: acc, promptTokens, completionTokens }) });
 }
 
@@ -236,6 +252,7 @@ async function handleStreaming({ res, started, body, userText, decision, tier, m
 // ---------------------------------------------------------------------------
 app.post("/v1/chat/completions", async (req, res) => {
   const started = Date.now();
+  let reservation = null;
   try {
     const body = req.body || {};
     const messages = body.messages || [];
@@ -261,9 +278,17 @@ app.post("/v1/chat/completions", async (req, res) => {
     const cacheKey = model + "::" + norm(userText);
     const grid = await getIntensity();
 
+    // 2b) budget: reserve the estimated cost BEFORE any model call. Enforcement
+    // rejects (402) here — no model is called. Metering-only mode flags but allows.
+    reservation = budget.reserve({
+      sessionId: session, estCostUsd: estimateRequestCost(model, tier, userText),
+      maxCostUsd: parseFloat(req.get("x-joule-max-cost")), now: started
+    });
+    if (!reservation.ok) return res.status(402).json({ error: { message: reservation.message, budget: reservation.detail } });
+
     // streaming branch — SSE out, metered via the store (not response headers)
     if (body.stream === true) {
-      return await handleStreaming({ res, started, body, userText, decision, tier, model, cacheKey, grid, session, qualityEscalated, routing });
+      return await handleStreaming({ res, started, body, userText, decision, tier, model, cacheKey, grid, session, qualityEscalated, routing, reservation });
     }
 
     const cachedCompletion = cacheGet(cacheKey);
@@ -307,6 +332,7 @@ app.post("/v1/chat/completions", async (req, res) => {
     } else {
       // real upstream call
       if (!config.upstreamApiKey) {
+        budget.release(reservation); // no model call happened — free the reservation
         return res.status(400).json({ error: { message: "UPSTREAM_API_KEY not set. Set it, or run with DRY_RUN=true to test the pipeline." } });
       }
       const upstream = await fetch(config.upstreamBaseUrl + "/chat/completions", {
@@ -316,7 +342,7 @@ app.post("/v1/chat/completions", async (req, res) => {
         signal: AbortSignal.timeout(120000)
       });
       const data = await upstream.json();
-      if (!upstream.ok) return res.status(upstream.status).json(data);
+      if (!upstream.ok) { budget.release(reservation); reservation.committed = true; return res.status(upstream.status).json(data); }
       completion = data;
       promptTokens = data.usage?.prompt_tokens ?? estTokens(userText);
       completionTokens = data.usage?.completion_tokens ?? estTokens(JSON.stringify(data.choices?.[0]?.message?.content || ""));
@@ -333,6 +359,7 @@ app.post("/v1/chat/completions", async (req, res) => {
 
     // 3) meter + 4) log (shared with the streaming path)
     const m = meterAndLog({ started, mode, model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: completion.choices?.[0]?.message?.content || "", prefixCache, semantic });
+    budget.commit(reservation, m.actual.costUsd); reservation.committed = true; // reconcile reservation to actual spend
 
     // 5) expose metrics on headers (drop-in clients still get a clean OpenAI body)
     res.set({
@@ -350,6 +377,7 @@ app.post("/v1/chat/completions", async (req, res) => {
     // 6) quality verification — AFTER the response, off the serving path
     verify.maybeVerify({ rec: m.rec, userText, answer: completion.choices?.[0]?.message?.content || "", body, completion });
   } catch (err) {
+    if (reservation && reservation.ok && !reservation.committed) budget.release(reservation); // free unspent reservation
     // once an SSE stream has started, headers are already flushed — just end it
     if (res.headersSent) { try { res.end(); } catch { /* client gone */ } }
     else res.status(502).json({ error: { message: scrub("joule proxy error: " + err.message) } });
@@ -427,6 +455,7 @@ app.get("/api/stats", async (_req, res) => {
   res.json({
     deployment: deploymentBlock(),
     cache: cacheBlock(totals),
+    budget: budget.stats(),
     config: {
       dryRun: config.dryRun,
       routingEnabled: config.routingEnabled,
@@ -603,6 +632,7 @@ app.get("/api/report", (req, res) => {
     period,
     deployment: deploymentBlock(),  // mode, data/provider region, cross-border, retention, redaction
     cache: cacheBlock(totals),      // separate cache savings line (zero quality risk) + advisory
+    budget: budget.stats(),         // limits, used, remaining, rejections (enforcement prevents overspend)
     methodology: {
       cost: "Exact: provider-returned token usage x configured per-model prices.",
       energy: "Estimated, DECODE-WEIGHTED: base[tier] + perKTokOut[tier] x (completion_tokens/1000) + perKTokIn[tier] x (prompt_tokens/1000), with perKTokIn an order of magnitude below perKTokOut. Measurement studies show inference energy is dominated by the decode phase — near-zero correlation with prompt length, scaling with tokens generated. Anchored to GPU characterisation (ML.ENERGY / Zeus / TokenPowerBench methodology) with IEA 'Energy & AI' for order-of-magnitude sanity. Configurable in src/config.js.",
@@ -631,7 +661,13 @@ app.get("/api/report", (req, res) => {
   });
 });
 
-app.get("/api/health", (_req, res) => res.json({ ok: true, version: "0.1.0", dryRun: config.dryRun }));
+// Prometheus / OpenTelemetry-compatible metrics (dep-free, always on) from the real log.
+app.get("/metrics", (_req, res) => {
+  res.set("content-type", "text/plain; version=0.0.4");
+  res.send(otel.metricsText(store.aggregate(), store.perModel(), budget.stats()));
+});
+
+app.get("/api/health", (_req, res) => res.json({ ok: true, version: "0.1.0", dryRun: config.dryRun, otel: otel.status() }));
 
 // Only listen when run directly (`npm start`). When required as a module (tests),
 // export the app so it can be mounted on an ephemeral port — behaviour is identical.
