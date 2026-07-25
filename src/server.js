@@ -12,6 +12,7 @@ const cacheadvice = require("./cacheadvice");
 const semcache = require("./semcache");
 const budget = require("./budget");
 const otel = require("./otel");
+const batch = require("./batch");
 
 // Estimate a request's cost BEFORE calling the model (prompt tokens + an assumed
 // completion length at the routed tier's price) — used for budget reservation.
@@ -106,7 +107,7 @@ const sessionOf = (req) => {
 // meter + log a request identically for streaming and non-streaming paths.
 // Returns the compute result with the stored record attached as `.rec` (so the
 // caller can hand it to the background verifier).
-function meterAndLog({ started, mode, model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText, completionText, prefixCache, semantic }) {
+function meterAndLog({ started, mode, model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText, completionText, prefixCache, semantic, batch }) {
   // A semantic hit serves a stored answer, so the model recompute is avoided (cache-like);
   // its embedding cost is tracked separately on the semantic savings line.
   const m = compute({ model, tier, promptTokens, completionTokens, gPerKwh: grid.gPerKwh, cached: mode === "cache" || mode === "semantic_cache" });
@@ -121,7 +122,9 @@ function meterAndLog({ started, mode, model, tier, decision, grid, promptTokens,
     prefixCache: prefixCache || null,
     cacheHostile: cacheadvice.analyzePrompt(promptText || "").hostile,
     // Layer-2 semantic cache (quality risk — separate line)
-    semantic: semantic || null
+    semantic: semantic || null,
+    // Batch discount (zero quality risk — separate line)
+    batch: batch ? { discount: batch.discount, savedUsd: m.actual.costUsd * batch.discount } : null
   };
   if (semantic) rec.semantic.netSavedUsd = m.saved.costUsd - (semantic.embedCostUsd || 0);
   // Retention is OFF by default: prompt/response TEXT is persisted only when
@@ -418,6 +421,49 @@ function deploymentBlock() {
   };
 }
 
+// ---- batch processing (savings-hierarchy #2) -------------------------------
+// Process one submitted item: same classify->route->meter pipeline, metered at the
+// batch discount (zero quality risk — same model/output, just async). No cache/
+// semantic/verify in the batch path (kept self-contained).
+async function processBatchItem(item, session, grid) {
+  const messages = item.messages || [];
+  const userText = lastUserText(messages);
+  const decision = classify(userText);
+  const routed = config.routingEnabled;
+  const tier = routed ? decision.tier : tierForModel(item.model);
+  const model = routed ? selectModel(tier) : (item.model || selectModel(tier));
+  const started = Date.now();
+  let completion, promptTokens, completionTokens;
+  if (config.dryRun) {
+    const answer = `【dry-run·batch】 ${model} (${tier}) at ${Math.round(config.batch.discount * 100)}% batch discount.`;
+    promptTokens = estTokens(userText); completionTokens = estTokens(answer);
+    completion = buildCompletion({ id: "joule-batch-" + started, created: Math.floor(started / 1000), model, content: answer, promptTokens, completionTokens });
+  } else {
+    if (!config.upstreamApiKey) throw new Error("UPSTREAM_API_KEY not set");
+    const up = await fetch(config.upstreamBaseUrl + "/chat/completions", {
+      method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + config.upstreamApiKey },
+      body: JSON.stringify({ ...item, model, stream: false }), signal: AbortSignal.timeout(120000)
+    });
+    completion = await up.json();
+    if (!up.ok) throw new Error("upstream " + up.status);
+    promptTokens = completion.usage?.prompt_tokens ?? estTokens(userText);
+    completionTokens = completion.usage?.completion_tokens ?? estTokens(JSON.stringify(completion.choices?.[0]?.message?.content || ""));
+  }
+  const m = meterAndLog({ started, mode: "batch", model, tier, decision, grid, promptTokens, completionTokens, session: item.session || session, routing: null, promptText: userText, completionText: completion.choices?.[0]?.message?.content || "", batch: { discount: config.batch.discount } });
+  return { custom_id: item.custom_id ?? null, tier, model, completion, saved_usd: m.rec.batch.savedUsd };
+}
+
+async function runBatch(job, items, session) {
+  const grid = await getIntensity();
+  for (const item of items) {
+    try { job.results.push(await processBatchItem(item, session, grid)); }
+    catch (err) { job.results.push({ custom_id: item.custom_id ?? null, error: scrub(err.message) }); }
+    job.completed++;
+  }
+  job.totals = { savedUsd: job.results.reduce((s, r) => s + (r.saved_usd || 0), 0) };
+  job.status = "completed";
+}
+
 // Cache advisory + separate savings line (Layer 1). Prefix/exact caching is ZERO
 // quality risk; savings are NET of the cache-write premium.
 function cacheBlock(totals) {
@@ -455,6 +501,7 @@ app.get("/api/stats", async (_req, res) => {
   res.json({
     deployment: deploymentBlock(),
     cache: cacheBlock(totals),
+    batch: batchBlock(totals),
     budget: budget.stats(),
     config: {
       dryRun: config.dryRun,
@@ -488,6 +535,7 @@ app.get("/api/summary", (req, res) => {
   const sum = store.summary(parseFilter(req.query));
   sum.quality = qualityBlock(sum.totals);
   sum.cache = cacheBlock(sum.totals);
+  sum.batch = batchBlock(sum.totals);
   res.json(sum);
 });
 
@@ -496,6 +544,34 @@ app.post("/api/clear", (_req, res) => {
   const removed = store.clear();
   res.json({ cleared: true, removed });
 });
+
+// ---- batch endpoint (savings-hierarchy #2) ----
+// Submit latency-tolerant work; processed async at the provider batch discount.
+app.post("/v1/batch", (req, res) => {
+  const items = req.body && req.body.requests;
+  if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: { message: "requests[] required" } });
+  if (items.length > config.batch.maxSize) return res.status(400).json({ error: { message: `batch too large (max ${config.batch.maxSize})` } });
+  const session = sessionOf(req);
+  const job = batch.submit(items.length);
+  runBatch(job, items, session).catch((err) => { job.status = "failed"; job.error = scrub(err.message); });
+  res.status(202).json({ id: job.id, status: job.status, count: job.count });
+});
+
+app.get("/v1/batch/:id", (req, res) => {
+  const job = batch.get(req.params.id);
+  if (!job) return res.status(404).json({ error: { message: "batch not found" } });
+  res.json({ id: job.id, status: job.status, count: job.count, completed: job.completed, error: job.error, totals: job.totals, results: job.status === "completed" ? job.results : undefined });
+});
+
+// Batch savings line + advisory (zero quality risk).
+function batchBlock(totals) {
+  return {
+    discount: config.batch.discount,
+    count: totals.batch.count,
+    savedUsd: totals.batch.savedUsd,
+    note: `Batch processing runs latency-tolerant work asynchronously at the provider batch discount (~${Math.round(config.batch.discount * 100)}% off) — ZERO quality risk (same model, same output). Submit via POST /v1/batch; savings reported on a separate line.`
+  };
+}
 
 // Cumulative ROI since day one — real logged data only; empty state when no history.
 app.get("/api/roi", (_req, res) => {
@@ -632,6 +708,7 @@ app.get("/api/report", (req, res) => {
     period,
     deployment: deploymentBlock(),  // mode, data/provider region, cross-border, retention, redaction
     cache: cacheBlock(totals),      // separate cache savings line (zero quality risk) + advisory
+    batch: batchBlock(totals),      // batch-discount savings line (zero quality risk)
     budget: budget.stats(),         // limits, used, remaining, rejections (enforcement prevents overspend)
     methodology: {
       cost: "Exact: provider-returned token usage x configured per-model prices.",

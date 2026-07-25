@@ -198,6 +198,44 @@ test("/api/roi reconciles with /api/summary and renders an empty state with no d
   assert.ok("netAfterFees" in roi.net, "net-of-fees exposed");
 });
 
+test("POST /v1/batch processes async at the batch discount (zero quality risk, separate line)", async () => {
+  store.clear();
+  const submit = await fetch(base + "/v1/batch", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ requests: [
+      { custom_id: "a", messages: [{ role: "user", content: "summarise item one briefly" }] },
+      { custom_id: "b", messages: [{ role: "user", content: "analyse and evaluate this design deeply step by step" }] }
+    ] })
+  });
+  assert.equal(submit.status, 202, "submission accepted");
+  const { id, status, count } = await submit.json();
+  assert.equal(status, "queued"); assert.equal(count, 2);
+  // poll to completion
+  let job;
+  for (let i = 0; i < 20; i++) {
+    job = await (await fetch(base + "/v1/batch/" + id)).json();
+    if (job.status === "completed") break;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  assert.equal(job.status, "completed");
+  assert.equal(job.completed, 2);
+  assert.equal(job.results.length, 2);
+  assert.ok(job.results.find((r) => r.custom_id === "b").tier === "large", "complex item routed large");
+  assert.ok(job.totals.savedUsd > 0, "batch discount saved money");
+  // surfaced on its own line, flagged zero quality risk
+  const b = (await (await fetch(base + "/api/stats")).json()).batch;
+  assert.equal(b.count, 2);
+  assert.ok(b.savedUsd > 0);
+  assert.match(b.note, /zero quality risk/i);
+  const missing = await fetch(base + "/v1/batch/does-not-exist");
+  assert.equal(missing.status, 404);
+});
+
+test("POST /v1/batch rejects an empty request list", async () => {
+  const res = await fetch(base + "/v1/batch", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ requests: [] }) });
+  assert.equal(res.status, 400);
+});
+
 test("GET /metrics exposes Prometheus/OTel-compatible metrics from the real log", async () => {
   store.clear();
   await post({ model: "auto", messages: [{ role: "user", content: "summarise this briefly" }] });

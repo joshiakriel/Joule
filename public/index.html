@@ -505,7 +505,7 @@ async function refresh() {
 
   renderBudget(meta.budget);
   renderChart(view.series, view.window);
-  renderCache(view.cache);
+  renderCache(view.cache, view.batch);
   renderSessions(view.sessions);
   renderModels(view.perModel);
   renderLog(view.recent);
@@ -595,9 +595,12 @@ function renderBudget(b) {
     '</div>';
 }
 
-function renderCache(c) {
+function renderCache(c, batch) {
   const box = $("cacheBody");
-  if (!c || !c.requests) { box.innerHTML = '<div class="empty-log">No requests yet.</div>'; return; }
+  const batchLine = (batch && batch.count > 0)
+    ? '<div class="netline" style="margin-top:6px">batch <span class="muted">(zero quality risk · ' + Math.round(batch.discount * 100) + '% off, async)</span> · ' + batch.count + ' request' + (batch.count === 1 ? '' : 's') + ' · saved <b class="cyan">' + fmtUsd(batch.savedUsd) + '</b></div>'
+    : '';
+  if (!c || !c.requests) { box.innerHTML = (batchLine || '<div class="empty-log">No requests yet.</div>'); return; }
   const pc = c.prefixCache || { netSavedUsd: 0, savedUsd: 0, writePremiumUsd: 0 };
   const pct = (x) => Math.round(x * 100) + "%";
   let html = '<div class="netline">' +
@@ -618,11 +621,11 @@ function renderCache(c) {
       ' · net saved <b class="cyan">' + fmtUsd(sm.netSavedUsd) + '</b> <span class="muted">(after embedding ' + fmtUsd(sm.embedCostUsd) + ')</span>' +
       '<br>realised error rate <b class="' + errCls + '">' + err + '</b> vs target ' + pct(sm.targetError) +
       ' <span class="muted">(learned thresholds avg ' + (sm.avgThreshold != null ? sm.avgThreshold.toFixed(3) : '—') + ' · ' + sm.entries + ' entries · ' + sm.verified + ' verified)</span></div>';
-    box.innerHTML = html + html2 + (c.tips && c.tips.length ? '<ul class="tips">' + c.tips.map((t) => '<li>' + esc(t) + '</li>').join('') + '</ul>' : '');
+    box.innerHTML = html + html2 + batchLine + (c.tips && c.tips.length ? '<ul class="tips">' + c.tips.map((t) => '<li>' + esc(t) + '</li>').join('') + '</ul>' : '');
     return;
   }
   if (c.tips && c.tips.length) html += '<ul class="tips">' + c.tips.map((t) => '<li>' + esc(t) + '</li>').join('') + '</ul>';
-  box.innerHTML = html;
+  box.innerHTML = html + batchLine;
 }
 
 async function renderRoi() {

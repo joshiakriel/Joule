@@ -64,6 +64,18 @@ const config = {
   subscriptionCostMonthly: num(process.env.SUBSCRIPTION_COST_MONTHLY, 0),
 
   /**
+   * Batch processing — savings-hierarchy #2. Latency-tolerant work submitted to
+   * `/v1/batch` is processed asynchronously at the provider's batch discount
+   * (OpenAI/Anthropic ~50% off). ZERO quality risk — same model, same output, just
+   * async. The discount reflects provider batch-API pricing and is reported on its
+   * own line; net cost paid = metered cost − batch discount.
+   */
+  batch: {
+    discount: num(process.env.BATCH_DISCOUNT, 0.5), // fraction off vs the sync price
+    maxSize: num(process.env.BATCH_MAX_SIZE, 1000)
+  },
+
+  /**
    * OpenTelemetry GenAI interop. `/metrics` (Prometheus) is always available and
    * dependency-free. OTLP/HTTP JSON span export (GenAI semantic conventions) is
    * opt-in: set OTEL_EXPORTER_OTLP_ENDPOINT (+ OTEL_ENABLED) and each request emits

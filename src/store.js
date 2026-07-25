@@ -110,6 +110,7 @@ function accumulate(rs) {
     cacheSavedUsd: 0,                                 // saved by our exact-response cache
     routingSavedUsd: 0,                               // saved by model routing (non-cache, non-semantic)
     semantic: { hits: 0, savedUsd: 0, embedCostUsd: 0, netSavedUsd: 0 }, // Layer-2 semantic cache line
+    batch: { count: 0, savedUsd: 0 },                 // batch-discount savings line (hierarchy #2)
     prefixCache: { cachedTokens: 0, writeTokens: 0, savedUsd: 0, writePremiumUsd: 0, netSavedUsd: 0 },
     hostile: 0                                         // cache-hostile prompt structures
   };
@@ -127,6 +128,7 @@ function accumulate(rs) {
       const sc = r.semantic || {}; t.semantic.embedCostUsd += sc.embedCostUsd || 0;
       t.semantic.netSavedUsd += (sc.netSavedUsd != null ? sc.netSavedUsd : r.saved.costUsd - (sc.embedCostUsd || 0));
     } else t.routingSavedUsd += r.saved.costUsd;
+    if (r.mode === "batch" && r.batch) { t.batch.count++; t.batch.savedUsd += r.batch.savedUsd || 0; }
     if (r.cacheHostile) t.hostile++;
     if (r.prefixCache) {
       const pc = r.prefixCache;

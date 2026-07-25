@@ -227,6 +227,25 @@ Joule surfaces this as a **separate savings line** from routing:
 Cache savings are kept on their own line in `/api/stats`, `/api/summary`, `/api/report` and the
 dashboard, distinct from routing savings, so each lever is independently attributable.
 
+### Batch processing (savings-hierarchy #2, zero quality risk)
+
+For **latency-tolerant** work, `POST /v1/batch` processes many requests asynchronously at the
+provider's **batch discount** (OpenAI/Anthropic ~50% off). Same model, same output — just async —
+so it carries **zero quality risk**, and the discount is reported on its own line.
+
+```bash
+# submit a batch (returns a job id, 202)
+curl http://localhost:3000/v1/batch -H "content-type: application/json" \
+  -d '{"requests":[{"custom_id":"a","messages":[{"role":"user","content":"summarise …"}]}]}'
+# poll for results
+curl http://localhost:3000/v1/batch/<id>
+```
+
+Each item is still routed (small/large) and metered; batch savings appear separately in
+`/api/stats`, `/api/report`, `/api/summary` and the dashboard. (The discount reflects provider
+batch-API pricing — run against a batch-capable provider for it to be real; the DRY_RUN demo is
+illustrative like all DRY_RUN numbers.)
+
 ### Layer 2 — semantic cache (opt-in, `SEMANTIC_CACHE_ENABLED=true`)
 
 Semantic caching returns a *semantically similar* (not identical) prompt's answer. Unlike
