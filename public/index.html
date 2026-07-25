@@ -241,16 +241,17 @@ function brandFallback(img){var n=(parseInt(img.dataset.try||"0",10))+1;img.data
     <div class="card">
       <h2 id="ovH2">02 · Selected activity vs. "always large model"</h2>
       <div class="meter-row">
-        <div class="meter-lbl"><span>Baseline energy</span><span class="v" id="baseWh">0 Wh</span></div>
+        <div class="meter-lbl"><span>Baseline energy <span class="muted">(routed · always-large)</span></span><span class="v" id="baseWh">0 Wh</span></div>
         <div class="meter base"><div class="fill" id="baseFill"></div></div>
       </div>
       <div class="meter-row">
-        <div class="meter-lbl"><span>Joule energy</span><span class="v" id="routeWh">0 Wh</span></div>
+        <div class="meter-lbl"><span>Joule energy <span class="muted">(routed)</span></span><span class="v" id="routeWh">0 Wh</span></div>
         <div class="meter routed"><div class="fill" id="routeFill"></div></div>
       </div>
-      <div class="saved"><div class="big" id="pct">0%</div><div class="cap">energy &amp; CO₂ avoided</div>
+      <div class="saved"><div class="big" id="pct">0%</div><div class="cap">energy &amp; CO₂ avoided by routing</div>
         <div class="qhold" id="qhold">quality: <span class="muted">not yet verified</span></div>
       </div>
+      <div class="netline" id="leverLine"></div>
       <div class="kpis">
         <div class="kpi"><div class="n cyan" id="kCost">$0.00</div><div class="l">Cost saved</div><div class="s" id="kReq">0 requests</div></div>
         <div class="kpi"><div class="n cyan" id="kEnergy">0 Wh</div><div class="l">Energy saved</div><div class="s" id="kCache">0 cache hits</div></div>
@@ -482,12 +483,25 @@ async function refresh() {
 
   // filtered KPIs + meters
   $("fCount").textContent = t.requests + " request" + (t.requests===1?"":"s") + " in view";
-  $("baseWh").textContent = fmtWh(t.energyWh.baseline);
-  $("routeWh").textContent = fmtWh(t.energyWh.actual);
-  const max = Math.max(t.energyWh.baseline, 0.0001);
+  // Hero = ROUTING lever only (non-cache), so the headline isn't cache-inflated.
+  const re = t.routingEnergy || { actual: 0, baseline: 0 };
+  const routingPct = re.baseline > 0 ? Math.round((1 - re.actual / re.baseline) * 100) : 0;
+  $("baseWh").textContent = fmtWh(re.baseline);
+  $("routeWh").textContent = fmtWh(re.actual);
+  const max = Math.max(re.baseline, 0.0001);
   $("baseFill").style.width = "100%";
-  $("routeFill").style.width = (t.energyWh.actual / max * 100) + "%";
-  $("pct").textContent = (t.savedPct || 0) + "%";
+  $("routeFill").style.width = (re.actual / max * 100) + "%";
+  $("pct").textContent = routingPct + "%";
+  // per-lever savings breakdown (cache is a separate, zero-quality-risk lever)
+  const ce = t.cacheEnergy || { actual: 0, baseline: 0 };
+  const cacheSavedWh = Math.max(0, ce.baseline - ce.actual);
+  const cacheUsd = (t.cacheSavedUsd || 0) + (t.prefixCache ? t.prefixCache.netSavedUsd : 0) + (t.semantic ? t.semantic.netSavedUsd : 0);
+  const totalBaseWh = (re.baseline + ce.baseline) || 0.0001;
+  $("leverLine").innerHTML =
+    'savings by lever — <b class="cyan">routing ' + routingPct + '%</b> (' + fmtUsd(t.routingSavedUsd || 0) + ')' +
+    ' · <b class="cyan">cache</b> ' + fmtWh(cacheSavedWh) + ' / ' + fmtUsd(cacheUsd) + ' <span class="muted">(' + Math.round(cacheSavedWh / totalBaseWh * 100) + '% of total baseline · zero quality risk)</span>' +
+    ((t.batch && t.batch.savedUsd > 0) ? ' · <b class="cyan">batch</b> ' + fmtUsd(t.batch.savedUsd) : '') +
+    ((t.reasoning && t.reasoning.savedUsd > 0) ? ' · <b class="cyan">reasoning</b> ' + fmtUsd(t.reasoning.savedUsd) : '');
   $("kCost").textContent = fmtUsd(t.cost.saved);
   $("kReq").textContent = t.requests + " request" + (t.requests===1?"":"s");
   $("kEnergy").textContent = fmtWh(t.energyWh.saved);

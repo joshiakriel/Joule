@@ -109,6 +109,9 @@ function accumulate(rs) {
     // Cache is a SEPARATE savings line from routing (zero quality risk).
     cacheSavedUsd: 0,                                 // saved by our exact-response cache
     routingSavedUsd: 0,                               // saved by model routing (non-cache, non-semantic)
+    // Per-lever energy/carbon split so the hero % reflects ROUTING only (not cache-inflated).
+    routingEnergy: { actual: 0, baseline: 0 }, cacheEnergy: { actual: 0, baseline: 0 },
+    routingSavedCarbonG: 0, cacheSavedCarbonG: 0,
     semantic: { hits: 0, savedUsd: 0, embedCostUsd: 0, netSavedUsd: 0 }, // Layer-2 semantic cache line
     batch: { count: 0, savedUsd: 0 },                 // batch-discount savings line (hierarchy #2)
     reasoning: { requests: 0, downgrades: 0, reasoningTokens: 0, savedTokens: 0, savedUsd: 0 }, // reasoning-budget line
@@ -123,6 +126,15 @@ function accumulate(rs) {
     t.cost.actual += r.actual.costUsd; t.cost.baseline += r.baseline.costUsd; t.cost.saved += r.saved.costUsd;
     t.energyWh.actual += r.actual.energyWh; t.energyWh.baseline += r.baseline.energyWh; t.energyWh.saved += r.saved.energyWh;
     t.carbonG.actual += r.actual.carbonG; t.carbonG.baseline += r.baseline.carbonG; t.carbonG.saved += r.saved.carbonG;
+    // per-lever energy/carbon: cache hits recompute nothing (their saving is a cache lever,
+    // not routing), so split them out to keep the routing headline honest.
+    if (r.cached) {
+      t.cacheEnergy.actual += r.actual.energyWh; t.cacheEnergy.baseline += r.baseline.energyWh;
+      t.cacheSavedCarbonG += r.saved.carbonG;
+    } else {
+      t.routingEnergy.actual += r.actual.energyWh; t.routingEnergy.baseline += r.baseline.energyWh;
+      t.routingSavedCarbonG += r.saved.carbonG;
+    }
     if (r.cached) t.cacheSavedUsd += r.saved.costUsd;
     else if (r.mode === "semantic_cache") {
       t.semantic.hits++; t.semantic.savedUsd += r.saved.costUsd;

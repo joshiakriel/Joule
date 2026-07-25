@@ -13,47 +13,42 @@
 const TARGET = (process.argv[2] || process.env.DEMO_TARGET || "http://localhost:3000").replace(/\/$/, "");
 const COUNT = Number(process.argv[3] || process.env.DEMO_COUNT || 30);
 
-// A spread across the router's signal families so routing looks realistic.
-const TRIVIAL = [
-  "hi there",
-  "thanks so much!",
-  "hello, how are you today",
-  "what's the capital of France",
-  "good morning"
+// Templates × topics => MOSTLY DISTINCT prompts, so the mix reflects real traffic
+// (routing + verification), not a cache that swallows everything. A minority repeat
+// to still demonstrate the cache lever. Randomised per run to limit cross-run cache.
+const TOPICS = [
+  "the onboarding flow", "the billing webhook", "invoice exports", "the search index",
+  "mobile checkout", "the auth service", "report generation", "the notification queue",
+  "user preferences", "the payment retry logic", "session handling", "the CSV importer",
+  "rate limiting", "the caching layer", "webhook retries", "the audit log",
+  "profile photos", "the recommendation feed", "email delivery", "the settings page",
+  "password resets", "the dashboard charts", "API pagination", "the upload pipeline",
+  "feature flags", "the pricing table", "timezone handling", "the export scheduler",
+  "currency formatting", "the search filters"
 ];
-const FORMAT = [
-  "summarise this paragraph in one line",
-  "translate 'good evening' into Spanish",
-  "reformat these notes into bullet points",
-  "shorten this sentence for me"
+const TEMPLATES = [
+  // small-tier (trivial/format)
+  (x) => `summarise ${x} in one short line`,
+  (x) => `reformat the notes about ${x} into bullet points`,
+  (x) => `shorten the description of ${x} for me`,
+  (x) => `what does ${x} do, briefly?`,
+  // large-tier (reason/code)
+  (x) => `analyse and evaluate the trade-offs of ${x} step by step`,
+  (x) => `design ${x} and derive its failure modes in depth`,
+  (x) => `debug the async race condition in ${x} in Node.js`,
+  (x) => `write a regex and SQL to validate ${x}`
 ];
-const REASON = [
-  "prove step by step that the square root of 2 is irrational and analyse the argument",
-  "design the architecture and evaluate the trade-offs of a multi-region database",
-  "explain how a transformer attention head works and why it scales",
-  "compare and evaluate two strategies for cutting inference cost"
-];
-const CODE = [
-  "write a Python function with async code to debug a race condition",
-  "give me a regex to validate an email and explain each part",
-  "refactor this Node.js API handler and fix the SQL injection",
-  "why does this TypeScript generic fail to compile"
-];
-
-// Two deliberate repeats to exercise the normalized-exact cache.
-const REPEATS = ["hi there", "write a Python function with async code to debug a race condition"];
 
 function buildPrompts(n) {
-  const pools = [TRIVIAL, FORMAT, REASON, CODE];
-  const out = [];
-  let i = 0;
-  while (out.length < n) {
-    const pool = pools[i % pools.length];
-    out.push(pool[Math.floor(i / pools.length) % pool.length]);
-    i++;
-  }
-  // sprinkle the repeats in so cache hits show up
-  for (const r of REPEATS) out.splice(Math.floor(out.length / 2), 0, r);
+  const combos = [];
+  for (const t of TOPICS) for (const tpl of TEMPLATES) combos.push(tpl(t));
+  // shuffle (Fisher–Yates) so each run uses a different subset -> fewer cross-run cache hits
+  for (let i = combos.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [combos[i], combos[j]] = [combos[j], combos[i]]; }
+  const distinctCount = Math.max(1, Math.ceil(n * 0.85));
+  const out = combos.slice(0, distinctCount);
+  // ~15% deliberate repeats to exercise the normalized-exact cache
+  const repeats = n - out.length;
+  for (let k = 0; k < repeats; k++) out.splice(Math.floor(Math.random() * out.length), 0, out[k % out.length]);
   return out.slice(0, n);
 }
 
