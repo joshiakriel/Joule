@@ -8,6 +8,7 @@ const { compute, prefixCacheSavings } = require("./metrics");
 const store = require("./store");
 const verify = require("./verify");
 const { redact } = require("./redact");
+const containsPII = (text) => redact(text) !== text; // PII signal: never semantic-cache these
 const cacheadvice = require("./cacheadvice");
 const semcache = require("./semcache");
 const budget = require("./budget");
@@ -332,9 +333,15 @@ app.post("/v1/chat/completions", async (req, res) => {
     let completion, promptTokens, completionTokens, mode, prefixCache = null, semantic = null;
 
     // Layer-2 semantic cache — ONLY on a Layer-1 (exact) miss, so hits never embed.
+    // Namespaced by tenant/project/user-tier/model/system-prompt for ISOLATION;
+    // sensitive prompts (patterns or X-Joule-Cache-Bypass) skip the semantic layer.
+    const systemText = messages.filter((mm) => mm && mm.role === "system").map((mm) => typeof mm.content === "string" ? mm.content : "").join(" ");
+    const semCtx = { tenant: req.get("x-joule-tenant") || null, project: req.get("x-joule-project") || null, userTier: req.get("x-joule-user-tier") || null, model, systemHash: systemText };
+    const cacheBypass = semcache.isBypassed(userText, req.get("x-joule-cache-bypass"));
     let semLookup = null;
     if (!cachedCompletion && semcache.enabled()) {
-      try { semLookup = await semcache.lookup(model, userText); } catch { semLookup = null; }
+      if (cacheBypass) semcache.recordBypass();
+      else { try { semLookup = await semcache.lookup(semCtx, userText); } catch { semLookup = null; } }
     }
 
     if (cachedCompletion) {
@@ -349,7 +356,7 @@ app.post("/v1/chat/completions", async (req, res) => {
       completion = e.completion;
       promptTokens = e.promptTokens; completionTokens = e.completionTokens;
       mode = "semantic_cache";
-      semantic = { sim: semLookup.sim, threshold: e.threshold, embedCostUsd: (estTokens(userText) / 1e6) * config.semanticCache.embedPricePerM };
+      semantic = { sim: semLookup.sim, threshold: e.threshold, asOf: new Date(e.createdAt).toISOString(), embedCostUsd: (estTokens(userText) / 1e6) * config.semanticCache.embedPricePerM };
       const answer = e.completion.choices?.[0]?.message?.content || "";
       semcache.onServe(e, semLookup.sim, () => config.dryRun ? semcache.dryCorrect(semLookup.sim) : liveSemanticCorrect(userText, model, answer));
     } else if (config.dryRun) {
@@ -365,7 +372,7 @@ app.post("/v1/chat/completions", async (req, res) => {
       mode = "dry_run";
       // synthesize a plausible prefix-cache hit so the advisory is demoable offline
       prefixCache = prefixCacheSavings({ model, tier, cachedInputTokens: Math.round(promptTokens * config.cache.dryRunPrefixRate), writeInputTokens: 0 });
-      if (semLookup) semcache.addEntry({ model, userText, vec: semLookup.vec, completion, promptTokens, completionTokens });
+      if (semLookup) semcache.addEntry({ ctx: semCtx, userText, vec: semLookup.vec, completion, promptTokens, completionTokens, hasPII: containsPII(userText) || containsPII(answer) });
     } else {
       // real upstream call
       if (!config.upstreamApiKey) {
@@ -388,7 +395,7 @@ app.post("/v1/chat/completions", async (req, res) => {
       // real prefix-cache savings from the provider's returned usage
       const cu = extractCacheUsage(data.usage);
       prefixCache = prefixCacheSavings({ model, tier, cachedInputTokens: cu.cachedInputTokens, writeInputTokens: cu.writeInputTokens });
-      if (semLookup) semcache.addEntry({ model, userText, vec: semLookup.vec, completion, promptTokens, completionTokens });
+      if (semLookup) semcache.addEntry({ ctx: semCtx, userText, vec: semLookup.vec, completion, promptTokens, completionTokens, hasPII: containsPII(userText) || containsPII(data.choices?.[0]?.message?.content || "") });
     }
 
     // populate the exact cache for freshly-generated completions only (never for a
@@ -519,13 +526,17 @@ function cacheBlock(totals) {
     prefixCache: pc,                                // {cachedTokens, writeTokens, savedUsd, writePremiumUsd, netSavedUsd}
     tips: cacheadvice.tips(stats),
     note: "Prefix/exact caching is ZERO quality risk — the model recomputes nothing, output is unchanged. Savings are NET of the cache-write premium and kept on a separate line from routing.",
-    // Layer-2 semantic cache — a SEPARATE, quality-RISKY line (opt-in).
+    // Layer-2 semantic cache — a SEPARATE, quality-RISKY line (opt-in) + SAFETY panel.
     semantic: {
-      enabled: sc.enabled, entries: sc.entries, hits: totals.semantic.hits,
+      enabled: sc.enabled, active: sc.active, autoDisabled: sc.autoDisabled, autoDisabledReason: sc.autoDisabledReason,
+      entries: sc.entries, namespaces: sc.namespaces, hits: totals.semantic.hits,
       savedUsd: totals.semantic.savedUsd, embedCostUsd: totals.semantic.embedCostUsd, netSavedUsd: totals.semantic.netSavedUsd,
-      realisedErrorRate: sc.realisedErrorRate, targetError: sc.targetError, verified: sc.verified,
-      avgThreshold: sc.avgThreshold, baseThreshold: sc.baseThreshold,
-      note: "Semantic caching CAN return a different question's answer — a genuine quality risk, NOT risk-free. Per-entry thresholds are learned to bound the realised error rate to the target; savings are NET of embedding spend."
+      // HONESTY: realisedErrorRate=null means NOT YET MEASURED on this traffic — no safe claim.
+      realisedErrorRate: sc.realisedErrorRate, targetError: sc.targetError, disableErrorRate: sc.disableErrorRate,
+      verified: sc.verified, servedErrors: sc.servedErrors,
+      avgThreshold: sc.avgThreshold, baseThreshold: sc.baseThreshold, minSimilarity: sc.minSimilarity,
+      ttlSec: sc.ttlSec, version: sc.version, bypassCount: sc.bypassCount, similarityDistribution: sc.similarityDistribution,
+      note: "Semantic caching CAN return a different question's answer — a genuine quality risk, NOT risk-free. It is namespace-isolated per tenant/scope, TTL + version invalidated, sensitive-query bypassed, and served only above a hard similarity floor. A sample of hits is verified; if the realised error rate exceeds target the layer auto-tightens, then auto-DISABLES. Savings must be read WITH the realised error rate; null = not yet measured on this traffic."
     }
   };
 }

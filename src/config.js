@@ -166,7 +166,18 @@ const config = {
     verifyRate: num(process.env.SEMANTIC_CACHE_VERIFY_RATE, 0.25),         // fraction of hits sampled to learn thresholds
     maxEntries: num(process.env.SEMANTIC_CACHE_MAX_ENTRIES, 500),
     embeddingModel: process.env.EMBEDDING_MODEL || "text-embedding-3-small",
-    embedPricePerM: num(process.env.EMBEDDING_PRICE_PER_M, 0.02)          // USD per 1M embedding tokens
+    embedPricePerM: num(process.env.EMBEDDING_PRICE_PER_M, 0.02),         // USD per 1M embedding tokens
+    // ---- SAFETY (semantic cache fails SILENTLY; these make it fail loudly) ----
+    minSimilarity: num(process.env.SEMANTIC_CACHE_MIN_SIMILARITY, 0.85),   // hard floor: never serve below this, whatever the target
+    ttlSec: num(process.env.SEMANTIC_CACHE_TTL, 86400),                    // per-entry staleness cap (~24h); never serve past it
+    version: process.env.SOURCE_VERSION || process.env.SEMANTIC_CACHE_VERSION || "1", // bump to invalidate all entries (version-tagged keys)
+    maxInputChars: num(process.env.SEMANTIC_CACHE_MAX_INPUT_CHARS, 8000),  // adversarial guard: don't embed oversized/crafted input
+    disableErrorRate: num(process.env.SEMANTIC_CACHE_DISABLE_ERROR_RATE, 0.15), // realised error above this (after minSamples) auto-DISABLES the layer + alerts
+    disableMinSamples: num(process.env.SEMANTIC_CACHE_DISABLE_MIN_SAMPLES, 20),
+    // sensitive-query bypass: these prompts skip the semantic layer entirely (prefix cache may still apply)
+    bypassPatterns: (process.env.SEMANTIC_CACHE_BYPASS_PATTERNS
+      ? String(process.env.SEMANTIC_CACHE_BYPASS_PATTERNS).split(",").map((s) => s.trim()).filter(Boolean)
+      : ["\\b(diagnos|prescription|dosage|symptom)\\b", "\\b(invoice|balance|account number|wire transfer|iban)\\b", "\\b(lawsuit|contract clause|liability|legal advice)\\b", "\\b(password|api[_ -]?key|ssn|passport)\\b"])
   },
 
   // Carbon fallback (used when no EM token / API unreachable)

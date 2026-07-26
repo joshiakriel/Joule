@@ -664,17 +664,23 @@ function renderCache(c, batch, reasoning, advisory) {
     ' · cache-hostile prompts <b class="' + (c.hostileRate > 0.2 ? 'q-warn' : '') + '">' + pct(c.hostileRate) + '</b>' +
     (pc.writePremiumUsd > 0 ? ('<br>prefix reads saved <b>' + fmtUsd(pc.savedUsd) + '</b> − write premium <b>' + fmtUsd(pc.writePremiumUsd) + '</b> = net <b>' + fmtUsd(pc.netSavedUsd) + '</b>') : '') +
     '</div>';
-  // Layer-2 semantic cache — separate line, flagged as a QUALITY RISK
+  // Layer-2 semantic cache — SAFETY panel (quality risk; honesty: savings shown WITH error rate)
   const sm = c.semantic;
   if (sm && sm.enabled) {
-    const err = sm.realisedErrorRate == null ? '—' : pct(sm.realisedErrorRate);
-    const errCls = (sm.realisedErrorRate != null && sm.realisedErrorRate > sm.targetError) ? 'q-warn' : 'cyan';
+    const measured = sm.realisedErrorRate != null;
+    const err = !measured ? 'not yet measured' : pct(sm.realisedErrorRate);
+    const errCls = (measured && sm.realisedErrorRate > sm.targetError) ? 'q-warn' : (measured ? 'cyan' : 'q-warn');
+    const alert = sm.autoDisabled
+      ? '<br><b class="q-warn">⚠ AUTO-DISABLED</b> <span class="muted">' + esc(sm.autoDisabledReason || '') + ' — falling back to exact/prefix</span>'
+      : '';
+    const dist = sm.similarityDistribution || {};
     const html2 =
       '<div class="netline" style="margin-top:6px">' +
-      '<b class="q-warn">semantic cache (quality risk — not risk-free)</b> · ' + sm.hits + ' hit' + (sm.hits === 1 ? '' : 's') +
-      ' · net saved <b class="cyan">' + fmtUsd(sm.netSavedUsd) + '</b> <span class="muted">(after embedding ' + fmtUsd(sm.embedCostUsd) + ')</span>' +
-      '<br>realised error rate <b class="' + errCls + '">' + err + '</b> vs target ' + pct(sm.targetError) +
-      ' <span class="muted">(learned thresholds avg ' + (sm.avgThreshold != null ? sm.avgThreshold.toFixed(3) : '—') + ' · ' + sm.entries + ' entries · ' + sm.verified + ' verified)</span></div>';
+      '<b class="q-warn">semantic cache — SAFETY</b> <span class="muted">(quality risk, not risk-free · default off)</span>' + alert +
+      '<br>' + sm.hits + ' hit' + (sm.hits === 1 ? '' : 's') + ' · net saved <b class="cyan">' + fmtUsd(sm.netSavedUsd) + '</b> ' +
+      '<b class="' + errCls + '">@ incorrect-hit rate ' + err + '</b> <span class="muted">(target ' + pct(sm.targetError) + ' · auto-disable ' + pct(sm.disableErrorRate) + ' · n=' + sm.verified + ')</span>' +
+      '<br><span class="muted">isolation: ' + sm.namespaces + ' namespace' + (sm.namespaces === 1 ? '' : 's') + ' · floor sim ' + sm.minSimilarity + ' · learned avg ' + (sm.avgThreshold != null ? sm.avgThreshold.toFixed(3) : '—') + ' · TTL ' + Math.round(sm.ttlSec / 3600) + 'h · ver ' + esc(String(sm.version)) + ' · bypassed ' + sm.bypassCount + ' · entries ' + sm.entries + '</span>' +
+      '<br><span class="muted">hit similarity — 0.85–0.9: ' + (dist['0.85-0.9'] || 0) + ' · 0.9–0.95: ' + (dist['0.9-0.95'] || 0) + ' · 0.95–1.0: ' + (dist['0.95-1.0'] || 0) + '</span></div>';
     box.innerHTML = html + html2 + batchLine + reasoningLine + advLine + (c.tips && c.tips.length ? '<ul class="tips">' + c.tips.map((t) => '<li>' + esc(t) + '</li>').join('') + '</ul>' : '');
     return;
   }

@@ -159,26 +159,48 @@ test("/api/stats + /api/report expose a cache block (separate line, advisory, ze
   assert.ok(rep.cache && "prefixCache" in rep.cache);
 });
 
-test("semantic cache (opt-in) serves a near-duplicate and reports it on a separate, quality-risk line", async () => {
-  store.clear(); semcache.reset(); semcache.configure({ enabled: true, baseThreshold: 0.8, verifyRate: 1 });
+// NOTE: the server's in-memory exact cache persists across tests, so each semantic
+// test uses a UNIQUE base phrase (and distinct near-dups) to avoid exact-cache cross-talk.
+test("semantic cache (opt-in) serves a near-duplicate and reports safety metrics on its own line", async () => {
+  store.clear(); semcache.reset(); semcache.configure({ enabled: true, baseThreshold: 0.8, minSimilarity: 0.5, verifyRate: 1 });
   try {
-    const first = await post({ model: "auto", messages: [{ role: "user", content: "summarise the quarterly sales report briefly" }] });
+    const first = await post({ model: "auto", messages: [{ role: "user", content: "summarise the annual revenue memo briefly" }] });
     assert.notEqual(first.headers.get("x-joule-mode"), "semantic_cache", "first is a miss (stored)");
-    const second = await post({ model: "auto", messages: [{ role: "user", content: "summarise the quarterly sales report briefly please" }] });
+    const second = await post({ model: "auto", messages: [{ role: "user", content: "summarise the annual revenue memo briefly please" }] });
     assert.equal(second.headers.get("x-joule-mode"), "semantic_cache", "near-duplicate served from semantic cache");
     await new Promise((r) => setTimeout(r, 10));
     const c = (await (await fetch(base + "/api/stats")).json()).cache;
     assert.equal(c.semantic.enabled, true);
     assert.ok(c.semantic.hits >= 1, "semantic hit counted");
-    assert.ok("netSavedUsd" in c.semantic && "embedCostUsd" in c.semantic, "net-of-embedding savings reported");
-    assert.ok("realisedErrorRate" in c.semantic && "targetError" in c.semantic, "error rate tracked vs target");
-    assert.match(c.semantic.note, /quality risk/i);
-    // it must NOT be folded into the routing or exact-cache savings lines
+    assert.ok("netSavedUsd" in c.semantic && "realisedErrorRate" in c.semantic, "savings + realised error reported together");
+    for (const k of ["namespaces", "minSimilarity", "ttlSec", "version", "bypassCount", "similarityDistribution", "autoDisabled"]) assert.ok(k in c.semantic, "safety metric " + k);
+    assert.match(c.semantic.note, /namespace-isolated/i);
     const rep = await (await fetch(base + "/api/report?format=json")).json();
     assert.ok("semantic" in rep.cache);
-  } finally {
-    semcache.reset(); // restore disabled state so later tests are unaffected
-  }
+  } finally { semcache.reset(); }
+});
+
+test("semantic cache ISOLATION: tenant B never gets tenant A's cached answer (over HTTP)", async () => {
+  store.clear(); semcache.reset(); semcache.configure({ enabled: true, baseThreshold: 0.8, minSimilarity: 0.5, verifyRate: 1 });
+  try {
+    await post({ model: "auto", messages: [{ role: "user", content: "outline the regional logistics plan briefly" }] }, { "x-joule-tenant": "tenant-A" }); // store under A
+    const b = await post({ model: "auto", messages: [{ role: "user", content: "outline the regional logistics plan briefly now" }] }, { "x-joule-tenant": "tenant-B" });
+    assert.notEqual(b.headers.get("x-joule-mode"), "semantic_cache", "tenant B must NOT get A's cached answer");
+    const a2 = await post({ model: "auto", messages: [{ role: "user", content: "outline the regional logistics plan briefly please" }] }, { "x-joule-tenant": "tenant-A" });
+    assert.equal(a2.headers.get("x-joule-mode"), "semantic_cache", "same-tenant near-duplicate hits");
+  } finally { semcache.reset(); }
+});
+
+test("sensitive-query bypass: X-Joule-Cache-Bypass skips the semantic layer, still metered", async () => {
+  store.clear(); semcache.reset(); semcache.configure({ enabled: true, baseThreshold: 0.8, minSimilarity: 0.5, verifyRate: 1 });
+  try {
+    await post({ model: "auto", messages: [{ role: "user", content: "recap the vendor onboarding notes briefly" }] });
+    const bypassed = await post({ model: "auto", messages: [{ role: "user", content: "recap the vendor onboarding notes briefly please" }] }, { "x-joule-cache-bypass": "true" });
+    assert.notEqual(bypassed.headers.get("x-joule-mode"), "semantic_cache", "bypassed request hits the model, not the semantic cache");
+    const c = (await (await fetch(base + "/api/stats")).json()).cache;
+    assert.ok(c.semantic.bypassCount >= 1, "bypass logged");
+    assert.ok((await (await fetch(base + "/api/stats")).json()).totals.requests >= 2, "still metered");
+  } finally { semcache.reset(); }
 });
 
 test("/api/roi reconciles with /api/summary and renders an empty state with no data", async () => {

@@ -252,19 +252,36 @@ illustrative like all DRY_RUN numbers.)
 
 Semantic caching returns a *semantically similar* (not identical) prompt's answer. Unlike
 prefix/exact caching it **can return a different question's answer — a genuine quality risk, not
-risk-free** — so Joule treats it as such and reports it on its **own** line:
+risk-free** — and it fails **silently** (a wrong hit is a confident `200 OK`). So it is **off by
+default** and heavily guarded; it's reported on its **own** line, always **beside its realised
+error rate**.
 
-- Runs **only on a Layer-1 miss**, so exact/prefix hits never pay the embedding cost. Embeddings
-  are cached — an identical prompt is never re-embedded.
-- **Per-entry learned thresholds** (vCache-style), not one global cosine cutoff: it starts
-  conservative (`SEMANTIC_CACHE_BASE_THRESHOLD`), a sample of served hits is verified, and when a
-  served answer is wrong that entry's threshold is **raised above the offending similarity**; if the
-  realised error rate exceeds `SEMANTIC_CACHE_TARGET_ERROR` it tightens globally.
-- The **realised error rate is tracked and reported** vs the target, and savings are reported
-  **net of embedding spend** — on a separate line from prefix/exact cache and from routing.
+- Runs **only on a Layer-1 miss** (hits never embed); embeddings are cached (no re-embed of identical prompts).
+- **Per-entry learned thresholds** (vCache-style) + a hard `SEMANTIC_CACHE_MIN_SIMILARITY` floor
+  below which it *never* serves, whatever the target rate.
+- **Net of embedding spend**, on its own line, always shown **with the realised error rate**.
 
-It's **off by default**; enabling it adds one embedding call per Layer-1 miss (the documented,
-opt-in trade-off). Semantic caching is never described as risk-free.
+**Safety guardrails (the failure modes it's built to prevent):**
+- **Tenant/scope isolation** — every entry is namespaced by **tenant + project + user tier + model +
+  system-prompt hash + version** (`X-Joule-Tenant` / `X-Joule-Project` / `X-Joule-User-Tier`
+  headers). A lookup can *only* match inside the same namespace — **tenant A can never receive
+  tenant B's answer** (a data-breach-class event this prevents).
+- **Sensitive-query bypass** — prompts matching `SEMANTIC_CACHE_BYPASS_PATTERNS` (financial /
+  medical / legal / secret defaults) or carrying `X-Joule-Cache-Bypass: true` **skip the semantic
+  layer entirely** and hit the model (prefix cache may still apply). Bypasses are counted.
+- **Staleness** — per-entry TTL (`SEMANTIC_CACHE_TTL`, ~24h; never served past it) + **version-tagged
+  keys** (`SOURCE_VERSION` bump invalidates everything). Hits expose their `as_of`.
+- **PII** — responses/prompts carrying personal data are **never cached** (the same redaction signal).
+- **Adversarial hardening** — inputs are sanitised (control chars stripped, oversized rejected) before embedding.
+- **Measured, not assumed** — a sample of hits is verified; if the realised error rate exceeds
+  `SEMANTIC_CACHE_TARGET_ERROR` it **auto-tightens**, and if it stays above
+  `SEMANTIC_CACHE_DISABLE_ERROR_RATE` it **auto-DISABLES the layer and alerts**, falling back to
+  exact/prefix. `realisedErrorRate: null` means *not yet measured on this traffic* — no safe claim is made.
+
+**Honesty:** cache savings are never shown without the incorrect-hit rate beside them; and the
+default posture is **exact/prefix ON, semantic OFF** until it's explicitly enabled *and* a realised
+error rate has been measured on the tenant's own traffic. Prefix/exact caching is unaffected — it
+recomputes freshly and is safe.
 
 ## OpenTelemetry / Prometheus interop
 
