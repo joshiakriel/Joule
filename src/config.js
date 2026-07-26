@@ -230,6 +230,13 @@ const config = {
     // probability + a distribution-free (marginal, NOT per-query) risk bound.
     mode: (["judge", "conformal"].includes(process.env.VERIFICATION_MODE) ? process.env.VERIFICATION_MODE : "conformal"),
     targetRiskAlpha: num(process.env.TARGET_RISK_ALPHA, 0.05),        // bound on P(unacceptable | routed small)
+    // Adaptive Conformal Inference (Gibbs & Candès): update the threshold ONLINE so the
+    // coverage guarantee holds THROUGH drift instead of going stale. "static" = the prior
+    // full-set CRC refit (reversible / A/B-able); "adaptive" = online alpha_t + recent window.
+    conformalMode: (["static", "adaptive"].includes(process.env.CONFORMAL_MODE) ? process.env.CONFORMAL_MODE : "adaptive"),
+    aciGamma: num(process.env.ACI_GAMMA, 0.01),                       // learning rate
+    aciGammaDrift: num(process.env.ACI_GAMMA_DRIFT, 0.05),            // boosted rate while drift is active
+    aciWindow: num(process.env.ACI_WINDOW, 500),                     // recent-sample window
     calibrationRefitEvery: num(process.env.CALIBRATION_REFIT_EVERY, 200), // refit isotonic every N new labels
     minCalibrationN: num(process.env.MIN_CALIBRATION_N, 50),          // below this: refuse to state a guarantee, fall back
     judgeModels: (process.env.JUDGE_MODELS ? String(process.env.JUDGE_MODELS).split(",").map((s) => s.trim()).filter(Boolean) : null), // null => [modelLarge]

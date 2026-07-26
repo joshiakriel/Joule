@@ -536,7 +536,12 @@ async function refresh() {
     'net of verification — saved <b>' + fmtUsd(net.costSaved) + '</b> · <b>' + fmtWh(net.energyWh) + '</b> · <b>' + fmtG(net.carbonG) + '</b>' +
     '  <span class="muted">(overhead ' + fmtUsd(ov.costUsd) + ' · ' + (ov.tokens || 0) + ' tok · ' + (qv.verified || 0) + ' labels)</span>' +
     '<br>verification: <b>' + esc(qv.mode || "") + '</b> · calibration n=<b>' + cal.n + '</b> · ECE ' + eceTxt +
-    ' · conformal ' + (cf.ready ? ('coverage ' + qPct(cf.coverage) + ' @ α=' + cf.alpha) : 'not yet certified') +
+    ' · conformal <b>' + esc(cf.conformalMode || 'static') + '</b> (α=' + cf.alpha + (cf.conformalMode === 'adaptive' ? ', α_t=' + (cf.workingAlpha != null ? cf.workingAlpha.toFixed(3) : '—') : '') + ')' +
+    // self-correcting coverage readout: realised rolling coverage vs the target (1-α)
+    (cf.rollingCoverage != null
+      ? (' · coverage <b class="' + (cf.rollingCoverage >= cf.targetCoverage - 0.05 ? 'cyan' : 'q-warn') + '">' + qPct(cf.rollingCoverage) + '</b> vs target ' + qPct(cf.targetCoverage))
+      : ' · coverage not yet measured') +
+    (cf.driftBoosted ? ' · <b class="q-warn">drift-boosted (γ=' + cf.adaptationRate + ')</b>' : '') +
     ' · drift <b class="' + (drift.drift ? 'q-warn' : '') + '">' + esc((drift.status || "—")) + '</b>' +
     ' <span class="muted">— marginal bound, not a per-query guarantee</span>';
 

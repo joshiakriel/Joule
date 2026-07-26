@@ -114,6 +114,37 @@ test("gate(): below MIN_CALIBRATION_N it refuses a guarantee and falls back to s
   assert.match(g.reason, /insufficient/);
 });
 
+test("conformal is ADAPTIVE by default and reports rolling coverage vs target", async () => {
+  verify.configure({ mode: "conformal", sampleRate: 1, minCalibrationN: 3 });
+  for (let i = 0; i < 12; i++) {
+    const rec = smallRec({ routing: { raw: 0.9 } });
+    verify.maybeVerify({ rec, userText: "adaptive default " + i, answer: "you're welcome, glad to help!", body: {} });
+  }
+  await verify.whenIdle();
+  const c = verify.qualityStats().conformal;
+  assert.equal(c.conformalMode, "adaptive", "adaptive is the default mode");
+  assert.ok("workingAlpha" in c && "rollingCoverage" in c && "targetCoverage" in c, "rolling coverage vs target surfaced");
+  assert.ok(Math.abs(c.targetCoverage - (1 - c.alpha)) < 1e-9, "targetCoverage = 1 - alpha");
+  assert.equal(c.adaptationRate, require("../src/config").verify.aciGamma, "base gamma when no drift");
+  assert.equal(c.driftBoosted, false);
+});
+
+test("CONFORMAL_MODE=static reproduces the frozen full-set CRC path (no ACI)", async () => {
+  verify.configure({ mode: "conformal", sampleRate: 1, minCalibrationN: 3, conformalMode: "static" });
+  for (let i = 0; i < 12; i++) {
+    const rec = smallRec({ routing: { raw: 0.9 } });
+    verify.maybeVerify({ rec, userText: "static mode " + i, answer: "you're welcome, glad to help!", body: {} });
+  }
+  await verify.whenIdle();
+  const c = verify.qualityStats().conformal;
+  assert.equal(c.conformalMode, "static");
+  assert.equal(c.workingAlpha, c.alpha, "static reports the target alpha, not an online alpha_t");
+  assert.equal(c.adaptationRate, null, "no adaptation rate in static mode");
+  assert.equal(c.driftBoosted, false);
+  // static coverage comes from the calibration-set CRC solve
+  assert.equal(c.rollingCoverage, c.coverage);
+});
+
 test("gate(): drift biases routing to large", () => {
   verify.configure({ minCalibrationN: 5, driftMinN: 5, driftK: 2 });
   // seed a calibration distribution centred on high routing signals

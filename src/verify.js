@@ -42,7 +42,10 @@ let forcedScore = opts.forceScore;
 let testDelayMs = 0;
 let rng = Math.random;                     // injectable for tests (order randomisation)
 let conf = { threshold: 1.01, coverage: null, riskBound: null, n: 0, alpha: opts.targetRiskAlpha, ready: false };
+let aci = null;                            // adaptive-conformal controller (when conformalMode==="adaptive")
 const liveRaw = [];                        // recent routing signals of live traffic (drift)
+
+function makeAci() { return conformal.createAci({ alpha: opts.targetRiskAlpha, gamma: opts.aciGamma, gammaDrift: opts.aciGammaDrift, window: opts.aciWindow }); }
 
 function reset() {
   opts = { ...config.verify };
@@ -50,10 +53,16 @@ function reset() {
   overhead.tokens = overhead.costUsd = overhead.energyWh = overhead.carbonG = 0;
   forcedScore = opts.forceScore; testDelayMs = 0; rng = Math.random;
   conf = { threshold: 1.01, coverage: null, riskBound: null, n: 0, alpha: opts.targetRiskAlpha, ready: false };
+  aci = opts.conformalMode === "adaptive" ? makeAci() : null;
   liveRaw.length = 0;
   calibrate.reset();
 }
-function configure(partial) { opts = { ...opts, ...partial }; }
+function configure(partial) {
+  const prevMode = opts.conformalMode;
+  opts = { ...opts, ...partial };
+  // switching mode re-inits the controller so static never reads a stale ACI window
+  if (opts.conformalMode !== prevMode) aci = opts.conformalMode === "adaptive" ? makeAci() : null;
+}
 function setForcedScore(x) { forcedScore = x; }
 function setTestDelay(ms) { testDelayMs = ms; }
 function setRng(fn) { rng = fn || Math.random; }
@@ -89,6 +98,20 @@ function migrateFromStore(records) {
 }
 
 function recomputeConformal() { conf = conformal.compute(calibrate.calibrationPoints(), opts.targetRiskAlpha); }
+
+// Fold one verified outcome into the threshold. Adaptive (default) nudges alpha_t
+// online (self-correcting through drift); static re-solves the full-set CRC bound.
+function applyVerifiedSample(raw, label) {
+  if (opts.conformalMode === "adaptive") {
+    if (!aci) aci = makeAci();
+    const p = calibrate.predict(raw);
+    aci.update({ p, label: label ? 1 : 0, drift: driftStatus().drift });
+    const s = aci.state();
+    conf = { threshold: s.threshold, coverage: s.rollingCoverage, riskBound: null, n: calibrate.size(), alpha: opts.targetRiskAlpha, ready: calibrate.ready(opts.minCalibrationN) && s.threshold <= 1, aci: s };
+  } else {
+    recomputeConformal();
+  }
+}
 
 // ---- rolling judge score + v1 safety-mode transitions (backward-compat) ----
 function pushScore(score) {
@@ -259,7 +282,7 @@ async function runVerification(ctx) {
     const raw = (rec.routing && Number.isFinite(rec.routing.raw)) ? rec.routing.raw : signals.routingSignal({ score: 0 });
     calibrate.add(raw, acceptable);
     calibrate.fit();                 // cheap for MVP-scale sets; refit-every still persists periodically
-    recomputeConformal();
+    applyVerifiedSample(raw, acceptable); // adaptive (online) or static conformal update
   }
 }
 
@@ -277,13 +300,23 @@ function maybeVerify(ctx) {
 
 function qualityStats() {
   const calN = calibrate.size();
+  const useAci = opts.conformalMode === "adaptive" && aci;
   const guaranteeReady = opts.mode === "conformal" && calibrate.ready(opts.minCalibrationN) && conf.ready && !driftStatus().drift;
   return {
     enabled: opts.enabled, mode: opts.mode, sampleRate: opts.sampleRate, threshold: opts.qualityThreshold,
     rollingScore: rollingScore(), sampleCount: scores.length, verifiedCount, sampledCount, lowAgreementCount,
     safetyMode: safety, referenceModel: config.modelLarge, judgeModels: judgeModelList(), overhead: { ...overhead },
     calibration: { n: calN, ready: calibrate.ready(opts.minCalibrationN), minN: opts.minCalibrationN, ece: calibrate.ece() },
-    conformal: { alpha: conf.alpha, threshold: conf.threshold, coverage: conf.coverage, riskBound: conf.riskBound, n: conf.n, ready: conf.ready },
+    conformal: {
+      alpha: conf.alpha, threshold: conf.threshold, coverage: conf.coverage, riskBound: conf.riskBound, n: conf.n, ready: conf.ready,
+      // adaptive conformal (Gibbs–Candès): self-correcting through drift
+      conformalMode: opts.conformalMode,
+      workingAlpha: useAci ? aci.state().alphaT : conf.alpha,          // the online alpha_t (adaptive) or target (static)
+      rollingCoverage: useAci ? aci.state().rollingCoverage : conf.coverage, // realised coverage over the recent window
+      targetCoverage: 1 - conf.alpha,
+      adaptationRate: useAci ? (driftStatus().drift ? opts.aciGammaDrift : opts.aciGamma) : null,
+      driftBoosted: Boolean(useAci && driftStatus().drift)
+    },
     drift: driftStatus(),
     guaranteeReady
   };

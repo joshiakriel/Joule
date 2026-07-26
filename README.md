@@ -80,6 +80,17 @@ the judge to a *labeller*:
 3. **Conformal risk control** (`src/conformal.js`) — a distribution-free threshold (CRC bound,
    Angelopoulos et al.) such that the probability of unacceptable degradation is bounded by
    `TARGET_RISK_ALPHA` (default `0.05`). **Route small only when the calibrated score clears it.**
+   Two threshold modes (`CONFORMAL_MODE`):
+   - **`adaptive` (default)** — *Adaptive Conformal Inference* (Gibbs & Candès 2021). Instead of a
+     static threshold refit periodically, a working level `alpha_t` self-corrects **online** after
+     each verified outcome: `alpha_t += gamma*(alpha - err_t)` (a miss tightens, a clean hit relaxes),
+     and the threshold is the CRC quantile over the **recent window** (`ACI_WINDOW`, 500) at `alpha_t`.
+     It **re-converges through distribution shift** rather than going stale. A **rolling realised
+     coverage** tracker exposes achieved-vs-target coverage over the window. When drift fires, the
+     learning rate is boosted (`ACI_GAMMA_DRIFT`, 0.05 vs base `ACI_GAMMA`, 0.01) for faster
+     re-convergence and the readout is flagged *drift-boosted*. `alpha_t` is floored at the
+     finite-sample limit `1/(n+1)` so it never demands tighter coverage than the window can certify.
+   - **`static`** — the frozen full-set CRC solve (the prior behaviour, exactly reproducible for A/B).
 4. **Judge → labeller only** (`src/verify.js`) — for a sampled fraction (`VERIFY_SAMPLE_RATE`,
    default `0.1`) of small answers, *off the serving path*, Joule gets a reference (large-model)
    answer and a **judge panel** label (`JUDGE_MODELS`), with **randomised answer order**, a
@@ -95,7 +106,8 @@ column in the activity log and a quality line per session.
 
 **Honesty rules (non-negotiable — these are the product):**
 - **Never a per-query guarantee.** The conformal bound is **marginal** (population-level) and
-  distribution shift can violate it — every claim reports **n and α**.
+  distribution shift can violate it — every claim reports **n, α, and the rolling realised coverage**
+  (adaptive mode additionally reports the working `α_t` and whether adaptation is drift-boosted).
 - **Never a fake number.** Below `MIN_CALIBRATION_N` (default `50`) the UI/API show *"insufficient
   data for a guarantee"* and fall back; with zero samples, *"not yet verified"*.
 - Verification is **sampled, not exhaustive**, and the **judge is a fallible model** (even in a panel).
@@ -105,7 +117,9 @@ column in the activity log and a quality line per session.
 **Config (env):** `VERIFICATION_MODE` (`conformal`|`judge`, default conformal), `VERIFY_SAMPLE_RATE`
 (0.1), `TARGET_RISK_ALPHA` (0.05), `MIN_CALIBRATION_N` (50), `CALIBRATION_REFIT_EVERY` (200),
 `JUDGE_MODELS` (csv, default = large model), `JUDGE_ACCEPT_THRESHOLD` (0.6),
-`JUDGE_AGREEMENT_THRESHOLD` (0.67), `DRIFT_K` (3), `DRIFT_MIN_N` (30); plus the v1 fallback knobs
+`JUDGE_AGREEMENT_THRESHOLD` (0.67), `DRIFT_K` (3), `DRIFT_MIN_N` (30), `CONFORMAL_MODE`
+(`adaptive`|`static`, default adaptive), `ACI_GAMMA` (0.01), `ACI_GAMMA_DRIFT` (0.05),
+`ACI_WINDOW` (500); plus the v1 fallback knobs
 `QUALITY_THRESHOLD`/`VERIFY_ROLLING_WINDOW`/`VERIFY_MIN_SAMPLES`/`VERIFY_PROBE_RATE`. In `DRY_RUN`
 the reference + judge are synthesized, so the whole pipeline runs fully offline.
 
