@@ -1,11 +1,19 @@
 "use strict";
 const fs = require("fs");
 const path = require("path");
+const config = require("./config");
+const pgstore = require("./pgstore");
 
 /**
- * Simple, dependency-free append-only log (JSONL on disk + in-memory mirror).
- * Great for an MVP and a single node. For multi-instance production, swap this
- * module for Postgres/ClickHouse — the interface stays the same.
+ * Append-only request log with an in-memory mirror. Two durable backends, chosen
+ * by `config.store.backend` (STORE_BACKEND), with an IDENTICAL public interface:
+ *   - "memory"   : dependency-free JSONL on local disk (MVP, single node, tests).
+ *   - "postgres" : durable Postgres (Supabase etc.) — records survive a restart.
+ *
+ * Either way the in-memory `records` array and ALL the aggregation below are the
+ * same code, so /api/stats, /api/report and a direct table read reconcile exactly.
+ * Postgres writes are serialized and run off the serving path; a DB outage logs and
+ * drops the metering write but never breaks the user's response (see pgstore.js).
  *
  * All filtering + aggregation lives here so the server and the tests share ONE
  * implementation. `predicateFor()` turns a {range,tier,mode,q} filter into a
@@ -17,15 +25,34 @@ let LOG_FILE = path.join(DATA_DIR, "log.jsonl");
 
 let records = [];
 let seq = 0;
+let backend = "memory";        // resolved from config on init()
+let pg = null;                 // pgstore instance when backend === "postgres"
+let readyPromise = Promise.resolve();
 
 // init() with no args uses the default ../data dir (production). Pass an explicit
 // dir to point the store at an isolated location — used by the test suite so runs
 // don't pollute data/log.jsonl. Re-initialising starts from a clean in-memory set.
 // Two kinds of JSONL line: request records, and `{vfor:<id>, verification:{…}}`
 // lines appended later when async verification completes — reconciled on load.
+//
+// The Postgres path loads asynchronously: callers that need the data present
+// (server boot before listen) must `await store.ready()`. Memory stays synchronous.
 function init(dir) {
-  if (dir) { DATA_DIR = dir; LOG_FILE = path.join(DATA_DIR, "log.jsonl"); }
+  backend = config.store.backend;
   records = [];
+  if (backend === "postgres") {
+    pg = pgstore.create(config.store);
+    // never crash boot on a DB outage — start degraded/empty and keep serving.
+    readyPromise = (async () => {
+      try { await pg.ensureSchema(); records = await pg.load(); }
+      catch (e) { console.error("store init error:", e && e.message ? e.message : String(e)); }
+    })();
+    return;
+  }
+  // ---- memory (JSONL) backend — unchanged behaviour ----
+  pg = null;
+  readyPromise = Promise.resolve();
+  if (dir) { DATA_DIR = dir; LOG_FILE = path.join(DATA_DIR, "log.jsonl"); }
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     if (fs.existsSync(LOG_FILE)) {
@@ -47,29 +74,46 @@ function init(dir) {
   }
 }
 
+// Resolves once the durable backend has finished loading into memory (postgres);
+// already resolved for the memory backend. Await before reading at boot.
+function ready() { return readyPromise; }
+// Await all queued durable writes (tests / graceful shutdown). No-op for memory.
+function flush() { return pg ? pg.flush() : Promise.resolve(); }
+// Release backend resources (pool). No-op for memory.
+function close() { return pg ? pg.close() : Promise.resolve(); }
+// Try to reconnect + replay buffered writes after a DB outage. No-op for memory.
+function recover() { return pg && pg.recover ? pg.recover() : Promise.resolve({ ok: true, pending: 0 }); }
+// Component health for /api/health. Memory backend is always "ok" (local disk).
+function health() { return pg && pg.health ? pg.health() : { backend, status: "ok", pendingWrites: 0 }; }
+
 function add(rec) {
   if (!rec.id) rec.id = Date.now().toString(36) + "-" + (seq++).toString(36);
   records.push(rec);
-  try { fs.appendFileSync(LOG_FILE, JSON.stringify(rec) + "\n"); } catch (e) { /* ignore disk errors in MVP */ }
+  // snapshot the record NOW (parity with appendFileSync capturing it at add() time).
+  // The durable write must NEVER break the caller's response — errors are logged, dropped.
+  if (backend === "postgres") { try { pg.persistAdd(rec, JSON.stringify(rec)); } catch (e) { console.error("store add error:", e.message); } }
+  else { try { fs.appendFileSync(LOG_FILE, JSON.stringify(rec) + "\n"); } catch (e) { /* ignore disk errors in MVP */ } }
   return rec;
 }
 
-// Attach an async verification result to an existing record (in memory + on disk).
+// Attach an async verification result to an existing record (in memory + durable).
 function addVerification(id, verification) {
   const rec = records.find((r) => r.id === id);
   if (rec) rec.verification = verification;
-  try { fs.appendFileSync(LOG_FILE, JSON.stringify({ vfor: id, verification }) + "\n"); } catch (e) { /* ignore */ }
+  if (backend === "postgres") { try { pg.persistVerification(id, JSON.stringify(verification)); } catch (e) { console.error("store addVerification error:", e.message); } }
+  else { try { fs.appendFileSync(LOG_FILE, JSON.stringify({ vfor: id, verification }) + "\n"); } catch (e) { /* ignore */ } }
   return Boolean(rec);
 }
 
 function all() { return records; }
 
-// Truly empty the store — in memory AND on disk. Destructive; used by the
+// Truly empty the store — in memory AND durably. Destructive; used by the
 // dashboard's "clear session data" action. Returns how many records were removed.
 function clear() {
   const removed = records.length;
   records = [];
-  try { fs.writeFileSync(LOG_FILE, ""); } catch (e) { /* ignore disk errors in MVP */ }
+  if (backend === "postgres") { try { pg.persistClear(); } catch (e) { console.error("store clear error:", e.message); } }
+  else { try { fs.writeFileSync(LOG_FILE, ""); } catch (e) { /* ignore disk errors in MVP */ } }
   return removed;
 }
 
@@ -300,7 +344,8 @@ function toCsv(pred) {
 }
 
 module.exports = {
-  init, add, addVerification, all, clear, recent, toCsv,
+  init, ready, flush, close, recover, health, add, addVerification, all, clear, recent, toCsv,
   aggregate, perModel, series, sessions, summary, dailyRollups,
-  predicateFor, rangeCutoff
+  predicateFor, rangeCutoff,
+  backend: () => backend
 };

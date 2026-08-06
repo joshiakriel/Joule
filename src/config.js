@@ -1,4 +1,8 @@
 "use strict";
+// Load local secrets/overrides first (.env.local, git-ignored), then .env. dotenv
+// never overwrites an already-set var, so precedence is: real environment (Render,
+// shell, or a test that sets process.env before require) > .env.local > .env.
+require("dotenv").config({ path: require("path").join(__dirname, "..", ".env.local") });
 require("dotenv").config();
 
 /**
@@ -62,6 +66,47 @@ const config = {
 
   // ROI view — monthly subscription used for net-of-fees + payback (0 => not shown)
   subscriptionCostMonthly: num(process.env.SUBSCRIPTION_COST_MONTHLY, 0),
+
+  /**
+   * Persistence backend. The store keeps an in-memory record mirror either way;
+   * this only chooses where records are DURABLY written so they survive a restart.
+   *   - "memory"   : append-only JSONL on local disk (single node, ephemeral hosts).
+   *   - "postgres" : durable Postgres (Supabase etc.) via DATABASE_URL, JSONL role dropped.
+   * Default: postgres when DATABASE_URL is set, else memory — so DRY_RUN/offline
+   * tests keep working with no database. SSL is required by Supabase.
+   */
+  store: {
+    backend: (["memory", "postgres"].includes(process.env.STORE_BACKEND)
+      ? process.env.STORE_BACKEND
+      : (process.env.DATABASE_URL ? "postgres" : "memory")),
+    databaseUrl: process.env.DATABASE_URL || "",
+    // Supabase (and most managed PG) require SSL; certs are provider-managed.
+    ssl: bool(process.env.DATABASE_SSL, true) ? { rejectUnauthorized: false } : false,
+    poolMax: num(process.env.DATABASE_POOL_MAX, 5),
+    // Resilience: bound how long we wait for a pooled connection / a single query so a
+    // DB outage or pool exhaustion fails fast instead of hanging the (off-path) write.
+    connectTimeoutMs: num(process.env.DATABASE_CONNECT_TIMEOUT_MS, 5000),
+    statementTimeoutMs: num(process.env.DATABASE_STATEMENT_TIMEOUT_MS, 8000),
+    // Failed metering writes buffer in memory and replay when the DB recovers, up to
+    // this cap (then the oldest are dropped with a logged warning). The in-memory
+    // record mirror is unaffected, so /api/stats stays correct throughout an outage.
+    maxBufferedWrites: num(process.env.DATABASE_MAX_BUFFERED_WRITES, 10000)
+  },
+
+  /**
+   * Upstream provider resilience (the primary path). Every live model call goes
+   * through src/upstream.js: one attempt per try with a hard timeout, exponential
+   * backoff retries on TRANSIENT failures only (429 / 5xx / network), an optional
+   * fallback model, and finally a clean OpenAI-shaped error. Never retries other 4xx
+   * (client errors) — they won't succeed on retry. All config-driven.
+   */
+  upstream: {
+    timeoutMs: num(process.env.UPSTREAM_TIMEOUT_MS, 120000),   // per-attempt hard timeout
+    maxRetries: num(process.env.UPSTREAM_MAX_RETRIES, 2),      // additional attempts after the first
+    retryBaseMs: num(process.env.UPSTREAM_RETRY_BASE_MS, 250), // backoff = base * 2^attempt (+ jitter)
+    retryJitter: bool(process.env.UPSTREAM_RETRY_JITTER, true),
+    fallbackModel: process.env.FALLBACK_MODEL || ""            // tried once after the primary exhausts; "" => none
+  },
 
   /**
    * Batch processing — savings-hierarchy #2. Latency-tolerant work submitted to
@@ -149,7 +194,8 @@ const config = {
   cache: {
     readMultiplier: num(process.env.CACHE_READ_MULTIPLIER, 0.5),   // OpenAI 0.5; Anthropic ~0.1
     writeMultiplier: num(process.env.CACHE_WRITE_MULTIPLIER, 1.0),  // OpenAI 1.0; Anthropic ~1.25
-    dryRunPrefixRate: num(process.env.CACHE_DRYRUN_PREFIX_RATE, 0.5) // synthetic cached-prefix fraction in DRY_RUN (demo only)
+    dryRunPrefixRate: num(process.env.CACHE_DRYRUN_PREFIX_RATE, 0.5), // synthetic cached-prefix fraction in DRY_RUN (demo only)
+    maxEntries: num(process.env.CACHE_MAX_ENTRIES, 10000)          // bound the exact-cache Map (LRU eviction) so memory can't grow unbounded
   },
 
   /**

@@ -11,10 +11,13 @@
     "demo": "node scripts/demo.js",
     "example:agent": "node examples/agent-workload.js"
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "dotenv": "^16.4.5",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "pg": "^8.22.0"
   },
   "license": "MIT"
 }

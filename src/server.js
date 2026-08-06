@@ -15,6 +15,7 @@ const budget = require("./budget");
 const otel = require("./otel");
 const batch = require("./batch");
 const reasoning = require("./reasoning");
+const upstream = require("./upstream");
 
 // Fill in reasoning-token counts + capping/downgrade savings (labelled estimates).
 function finalizeReasoning(info, tier, usage) {
@@ -75,10 +76,36 @@ function scrub(s) {
 }
 
 store.init();
-verify.init();       // load calibration + migrate existing judge scores
-budget.init(store.all()); // seed committed spend from the log
+// The Postgres backend loads the log asynchronously; seed budget only once it's in
+// memory. Memory backend resolves immediately, so this is a no-op wait there.
+const storeReady = store.ready().then(() => {
+  verify.init();            // load calibration + migrate existing judge scores
+  budget.init(store.all()); // seed committed spend from the log
+});
+
+// Backstop: a stray background promise (a secondary task) must never crash the process.
+// Log it loudly and keep serving — the user's request path is sacred.
+process.on("unhandledRejection", (reason) => console.error("[unhandledRejection]", reason && reason.message ? reason.message : reason));
+
+// When the durable store is degraded, periodically try to reconnect + replay buffered
+// writes so the DB reconciles with the in-memory mirror once it recovers. Timer is
+// unref'd so it never keeps the process alive on its own.
+if (require.main === module && store.backend() === "postgres") {
+  const t = setInterval(() => { store.recover().catch(() => {}); }, 15000);
+  if (t.unref) t.unref();
+}
 const app = express();
 app.use(express.json({ limit: "2mb" }));
+// Malformed / oversized / non-JSON bodies must never crash — return a clean, OpenAI-shaped
+// error. body-parser throws a typed error (SyntaxError, or status 413 for entity.too.large)
+// which lands here before any route runs.
+app.use((err, _req, res, next) => {
+  if (!err) return next();
+  const tooLarge = err.type === "entity.too.large" || err.status === 413;
+  const status = tooLarge ? 413 : 400;
+  console.warn(`[input] rejected malformed request body: ${err.type || err.message}`);
+  return res.status(status).json({ error: { message: tooLarge ? "request body too large" : "invalid JSON in request body", type: "invalid_request_error", code: null } });
+});
 app.use(express.static(path.join(__dirname, "..", "public")));
 
 // ---- tiny normalized cache (exact-match after normalization) ----
@@ -88,9 +115,15 @@ function cacheGet(key) {
   const hit = cache.get(key);
   if (!hit) return null;
   if (Date.now() - hit.ts > config.cacheTtlMs) { cache.delete(key); return null; }
+  // touch for LRU recency (Map preserves insertion order; re-insert moves to newest)
+  cache.delete(key); cache.set(key, hit);
   return hit.completion;
 }
-function cacheSet(key, completion) { cache.set(key, { completion, ts: Date.now() }); }
+function cacheSet(key, completion) {
+  cache.delete(key); cache.set(key, { completion, ts: Date.now() }); // newest last
+  // bound memory: evict the oldest entries once over the cap (LRU)
+  while (cache.size > config.cache.maxEntries) cache.delete(cache.keys().next().value);
+}
 
 const lastUserText = (messages) => {
   if (!Array.isArray(messages)) return "";
@@ -214,59 +247,70 @@ async function handleStreaming({ res, started, body, userText, decision, tier, m
 
   // live — forward with stream:true and pipe chunks through unmodified
   if (!config.upstreamApiKey) {
-    budget.release(reservation);
+    budget.release(reservation); if (reservation) reservation.committed = true;
     return res.status(400).json({ error: { message: "UPSTREAM_API_KEY not set. Set it, or run with DRY_RUN=true to test the pipeline." } });
   }
-  const upstream = await fetch(config.upstreamBaseUrl + "/chat/completions", {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: "Bearer " + config.upstreamApiKey },
-    // include_usage asks the provider to emit a final usage-bearing chunk; injects a capped thinking budget on reasoning models
-    body: JSON.stringify(reasoningPlan ? reasoning.applyToBody({ ...body, model, stream: true, stream_options: { include_usage: true } }, reasoningPlan) : { ...body, model, stream: true, stream_options: { include_usage: true } }),
-    signal: AbortSignal.timeout(120000)
-  });
-  if (!upstream.ok) {
-    budget.release(reservation);
-    const data = await upstream.json().catch(() => ({ error: { message: "upstream error " + upstream.status } }));
-    return res.status(upstream.status).json(data);
+  // resilient connect (timeout + retry/backoff + optional fallback). Retry applies to the
+  // INITIAL connection only — once bytes flow we can't safely re-issue the request.
+  const buildBody = (m) => {
+    const b = { ...body, model: m, stream: true, stream_options: { include_usage: true } };
+    return (reasoningPlan && m === model) ? reasoning.applyToBody(b, reasoningPlan) : b;
+  };
+  const up = await upstream.openStream({ model, buildBody });
+  if (!up.ok) {
+    budget.release(reservation); if (reservation) reservation.committed = true;
+    return res.status(up.status).json({ error: up.error });
   }
+  model = up.modelUsed;
 
   sseHeaders(res);
-  const reader = upstream.body.getReader();
+  const reader = up.response.body.getReader();
   const decoder = new TextDecoder();
-  let buffer = "", acc = "", usage = null;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    const text = decoder.decode(value, { stream: true });
-    res.write(text); // pipe upstream chunks to the client unmodified
-    buffer += text;
-    // parse complete SSE lines to capture usage + accumulate assistant text
-    let nl;
-    while ((nl = buffer.indexOf("\n")) >= 0) {
-      const line = buffer.slice(0, nl).trim();
-      buffer = buffer.slice(nl + 1);
-      if (!line.startsWith("data:")) continue;
-      const payload = line.slice(5).trim();
-      if (!payload || payload === "[DONE]") continue;
-      try {
-        const obj = JSON.parse(payload);
-        if (obj.usage) usage = obj.usage;
-        const d = obj.choices?.[0]?.delta?.content;
-        if (d) acc += d;
-      } catch { /* partial or non-JSON line — ignore */ }
+  let buffer = "", acc = "", usage = null, streamBroke = false;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const text = decoder.decode(value, { stream: true });
+      res.write(text); // pipe upstream chunks to the client unmodified
+      buffer += text;
+      // parse complete SSE lines to capture usage + accumulate assistant text
+      let nl;
+      while ((nl = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (!payload || payload === "[DONE]") continue;
+        try {
+          const obj = JSON.parse(payload);
+          if (obj.usage) usage = obj.usage;
+          const d = obj.choices?.[0]?.delta?.content;
+          if (d) acc += d;
+        } catch { /* partial or non-JSON line — ignore */ }
+      }
     }
+  } catch (streamErr) {
+    // provider stream broke or the client disconnected mid-response — record what was
+    // actually delivered, never leak the reservation, never crash.
+    streamBroke = true;
+    console.warn(`[stream] broke mid-response after ${acc.length} chars: ${scrub(streamErr && streamErr.message)}`);
+    try { reader.cancel().catch(() => {}); } catch { /* already gone */ }
   }
-  res.end();
+  try { if (!res.writableEnded) res.end(); } catch { /* client already gone */ }
 
-  // token usage from the stream if the provider sent it, else estimate
+  // nothing delivered on a broken stream -> no metering record, just settle the reservation
+  if (streamBroke && !acc) { budget.release(reservation); if (reservation) reservation.committed = true; return; }
+
+  // token usage from the stream if the provider sent it, else estimate over what we got
   const promptTokens = usage?.prompt_tokens ?? estTokens(userText);
   const completionTokens = usage?.completion_tokens ?? estTokens(acc);
-  cacheSet(cacheKey, buildCompletion({ id, created, model, content: acc, promptTokens, completionTokens }));
+  if (!streamBroke) cacheSet(cacheKey, buildCompletion({ id, created, model, content: acc, promptTokens, completionTokens })); // never cache a partial answer
   const cuLive = extractCacheUsage(usage);
   const livePrefix = prefixCacheSavings({ model, tier, cachedInputTokens: cuLive.cachedInputTokens, writeInputTokens: cuLive.writeInputTokens });
   const mLive = meterAndLog({ started, mode: "live", model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: acc, prefixCache: livePrefix, reasoning: finalizeReasoning(reasoningInfo, tier, usage) });
-  budget.commit(reservation, mLive.actual.costUsd); if (reservation) reservation.committed = true;
-  verify.maybeVerify({ rec: mLive.rec, userText, answer: acc, body, completion: buildCompletion({ id, created, model, content: acc, promptTokens, completionTokens }) });
+  budget.commit(reservation, mLive.actual.costUsd); if (reservation) reservation.committed = true; // settle exactly once
+  if (!streamBroke) verify.maybeVerify({ rec: mLive.rec, userText, answer: acc, body, completion: buildCompletion({ id, created, model, content: acc, promptTokens, completionTokens }) });
 }
 
 // ---------------------------------------------------------------------------
@@ -341,7 +385,8 @@ app.post("/v1/chat/completions", async (req, res) => {
     let semLookup = null;
     if (!cachedCompletion && semcache.enabled()) {
       if (cacheBypass) semcache.recordBypass();
-      else { try { semLookup = await semcache.lookup(semCtx, userText); } catch { semLookup = null; } }
+      // embeddings endpoint down -> skip the semantic layer, fall through to a normal call
+      else { try { semLookup = await semcache.lookup(semCtx, userText); } catch (e) { semLookup = null; console.warn(`[semcache] lookup skipped (embeddings degraded): ${scrub(e && e.message)}`); } }
     }
 
     if (cachedCompletion) {
@@ -374,20 +419,21 @@ app.post("/v1/chat/completions", async (req, res) => {
       prefixCache = prefixCacheSavings({ model, tier, cachedInputTokens: Math.round(promptTokens * config.cache.dryRunPrefixRate), writeInputTokens: 0 });
       if (semLookup) semcache.addEntry({ ctx: semCtx, userText, vec: semLookup.vec, completion, promptTokens, completionTokens, hasPII: containsPII(userText) || containsPII(answer) });
     } else {
-      // real upstream call
+      // real upstream call — timeout + retry/backoff + optional fallback via upstream.js
       if (!config.upstreamApiKey) {
-        budget.release(reservation); // no model call happened — free the reservation
+        budget.release(reservation); reservation.committed = true; // no model call happened — free the reservation
         return res.status(400).json({ error: { message: "UPSTREAM_API_KEY not set. Set it, or run with DRY_RUN=true to test the pipeline." } });
       }
-      const upstream = await fetch(config.upstreamBaseUrl + "/chat/completions", {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: "Bearer " + config.upstreamApiKey },
-        // forwards cache_control / prompt-cache hints unmodified; injects a capped thinking budget on reasoning models
-        body: JSON.stringify(reasoningPlan ? reasoning.applyToBody({ ...body, model }, reasoningPlan) : { ...body, model }),
-        signal: AbortSignal.timeout(120000)
-      });
-      const data = await upstream.json();
-      if (!upstream.ok) { budget.release(reservation); reservation.committed = true; return res.status(upstream.status).json(data); }
+      // build the per-model request body (reasoning budget injected only on the routed model)
+      const buildBody = (m) => (reasoningPlan && m === model) ? reasoning.applyToBody({ ...body, model: m }, reasoningPlan) : { ...body, model: m };
+      const up = await upstream.callJson({ model, buildBody });
+      if (!up.ok) {
+        // clean OpenAI-shaped error; reservation freed, nothing metered (no corrupt record)
+        budget.release(reservation); reservation.committed = true;
+        return res.status(up.status).json({ error: up.error });
+      }
+      const data = up.data;
+      model = up.modelUsed; // reflect a fallback model honestly in metering + headers
       completion = data;
       promptTokens = data.usage?.prompt_tokens ?? estTokens(userText);
       completionTokens = data.usage?.completion_tokens ?? estTokens(JSON.stringify(data.choices?.[0]?.message?.content || ""));
@@ -819,17 +865,33 @@ app.get("/metrics", (_req, res) => {
   res.send(otel.metricsText(store.aggregate(), store.perModel(), budget.stats()));
 });
 
-app.get("/api/health", (_req, res) => res.json({ ok: true, version: "0.1.0", dryRun: config.dryRun, otel: otel.status() }));
+// Health signal with per-component status. The process staying up is the top-level `ok`;
+// components report degraded/fallback without failing the check (degraded != down).
+app.get("/api/health", async (_req, res) => {
+  const db = store.health();
+  const prov = config.dryRun ? { status: "dry_run" } : (config.upstreamApiKey ? upstream.providerHealth() : { status: "no_key" });
+  let grid = { status: "unknown" };
+  try { const g = await getIntensity(); grid = { status: g.live ? "live" : "fallback", source: g.source }; } catch { grid = { status: "fallback" }; }
+  res.json({
+    ok: true, version: "0.1.0", dryRun: config.dryRun, otel: otel.status(),
+    components: {
+      db: { backend: db.backend, status: db.status, pendingWrites: db.pendingWrites || 0 },
+      provider: prov,
+      grid
+    }
+  });
+});
 
 // Only listen when run directly (`npm start`). When required as a module (tests),
 // export the app so it can be mounted on an ephemeral port — behaviour is identical.
 if (require.main === module) {
-  app.listen(config.port, () => {
-    console.log(`\n  Joule proxy → http://localhost:${config.port}`);
+  // wait for the durable store to finish loading (postgres) before accepting traffic
+  storeReady.then(() => app.listen(config.port, () => {
+    console.log(`\n  Joule proxy → http://localhost:${config.port} [store: ${store.backend()}]`);
     console.log(`  dashboard   → http://localhost:${config.port}/`);
     console.log(`  point clients at baseURL http://localhost:${config.port}/v1`);
     console.log(`  mode: ${config.dryRun ? "DRY_RUN (no external calls)" : "LIVE"} | routing: ${config.routingEnabled ? "on" : "off"} | grid zone: ${config.gridZone}\n`);
-  });
+  }));
 }
 
 module.exports = app;

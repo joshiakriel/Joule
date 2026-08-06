@@ -215,12 +215,124 @@ await client.chat.completions.create(
 npm test        # node --test — runs the whole suite offline, no API key, no network
 ```
 
-Uses Node's built-in test runner (`node:test`) — no extra dependencies. Coverage: the
-router (classification/tiering), metrics (exact cost, estimated energy, carbon, savings),
-the store (aggregation + CSV), and an in-process integration pass over the proxy
-(non-streaming headers + JSON, streaming SSE, `/api/stats` + `/api/report`, caching,
-routing). Tests run in `DRY_RUN` against an isolated temp data dir, so they never touch
-`data/log.jsonl`.
+Uses Node's built-in test runner (`node:test`) — no extra dependencies — and runs the whole
+suite start→finish in one command. Tests run in `DRY_RUN` against an isolated temp data dir on
+the memory backend, so they never touch `data/log.jsonl`, a database, or the network. Every
+test asserts the **correct value**, not just "no error".
+
+Layout (by module + an end-to-end group):
+
+| Area | File | Asserts |
+|---|---|---|
+| Routing | `router.test.js`, `reasoning.test.js` | simple→small / complex→large; reasoning effort cap; explicit override wins |
+| Caching | `cache.test.js`, `semcache.test.js` | exact-hit savings **net of write premium**; below-breakeven warning; semantic OFF by default; cross-tenant isolation |
+| Verification | `verify.test.js`, `calibrate.test.js`, `conformal.test.js` | below `MIN_CALIBRATION_N` → "insufficient data"; never a figure with 0 samples; net-of-verification; held-out coverage ≈ (1−α); adaptive re-converges after a shift, static does not |
+| Budgets | `budget.test.js` | over-cap block + session isolation; reservation settle/release; 429 body |
+| Metering | `metrics.test.js`, `store.test.js` | exact cost; **decode-weighted** energy inequality; persistence + reconciliation |
+| Persistence | `pgstore.test.js` | postgres survives a restart; reconciles with the durable rows (live-DB test opt-in) |
+| **End-to-end** | `integration.test.js`, `e2e.test.js` | full proxy pass; reasoning override header; **three-way reconciliation**; reservation no-leak on success/stream/abort/error; provider-error resilience; the shipped `demo.js` + `agent-workload.js` run against a live DRY_RUN server |
+
+The honesty invariants are protected by tests that genuinely fail if broken: the three-way
+**reconciliation** (`/api/stats` == `/api/report` == store, field-by-field), verification running
+**off the serving path** (the response returns before verification completes), and the
+**insufficient-data** refusal below `MIN_CALIBRATION_N`.
+
+To also run the live-Postgres persistence + reconciliation test, point it at a **throwaway**
+database (it truncates `records`) and opt in explicitly:
+
+```bash
+STORE_PG_TEST=1 DATABASE_URL=postgresql://…  npm test
+```
+
+## Persistence — Postgres with a memory fallback
+
+The request log (and the async verification results attached to it) is persisted so the
+dashboard and reports **survive a restart**. Two backends, one identical `store.js`
+interface — chosen by `STORE_BACKEND`:
+
+| Backend | What it does | When |
+|---|---|---|
+| `memory` | append-only JSONL on local disk (`data/log.jsonl`) | offline/DRY_RUN, tests, single ephemeral node |
+| `postgres` | durable Postgres (Supabase, RDS, local) via `DATABASE_URL` | production; data survives restarts/redeploys |
+
+**Default:** `postgres` when `DATABASE_URL` is set, else `memory` — so offline development and
+the test suite need no database. Either way the store keeps an **in-memory mirror** and runs
+the *same* JS aggregation, so `/api/stats`, `/api/report` and a direct table read reconcile
+exactly. Reads never touch the database on the serving path (zero added latency); durable
+writes are serialized and run off-path — a DB outage logs and drops the metering write but
+**never breaks the user's response**.
+
+```bash
+# Supabase (SSL required — configured automatically):
+export DATABASE_URL="postgresql://USER:PASSWORD@HOST:5432/postgres"
+export STORE_BACKEND=postgres         # optional; auto-selected when DATABASE_URL is set
+npm start
+```
+
+**Migrations** live in [`migrations/`](migrations/) as idempotent `CREATE TABLE IF NOT EXISTS`
+SQL and run **automatically on boot** (in filename order) — no separate migrate step, no ORM.
+The schema is a single `records` table: typed columns for the fields we filter on
+(`id, ts, tier, mode, model, session, cached`) plus the full record as `JSONB` and the
+async `verification` as `JSONB`, ordered by a `BIGSERIAL` for append-order parity with JSONL.
+Config: `DATABASE_URL`, `STORE_BACKEND`, `DATABASE_SSL` (default `true`), `DATABASE_POOL_MAX`
+(default `5`).
+
+## Resilience — the user's request path is sacred
+
+Joule degrades gracefully: metering, verification, carbon lookups, embeddings and logging are all
+**secondary** — if any of them fails, the user still gets their model response (or a clean,
+OpenAI-shaped error). Nothing secondary can take down the primary path.
+
+| Failure | What Joule does |
+|---|---|
+| **Provider timeout / 5xx / 429 / network** | Per-attempt timeout, then exponential-backoff retry (transient only — never other 4xx); optional `FALLBACK_MODEL`; else a clean OpenAI-shaped error. Reservation released, nothing metered. |
+| **Provider stream breaks mid-response** | Records what was actually delivered, settles the reservation exactly once, ends the response cleanly. |
+| **Database unreachable** | Proxy keeps serving from the in-memory mirror; failed metering writes **buffer and replay when the DB recovers**. Dashboard reads never hit the DB. Pool acquire + statement timeouts mean no hangs. |
+| **Grid/carbon API down** | Labelled fallback intensity (marked estimated); request completes. |
+| **Embeddings endpoint down** | Semantic layer skipped; falls back to exact/prefix cache or a normal call. |
+| **Verification/judge call fails** | Logged, sample skipped; never touches the user response. |
+| **Malformed / oversized body** | Clean `400` / `413`, never a crash. |
+
+Every degraded path logs a structured warning. **`GET /api/health`** returns component status:
+
+```jsonc
+{ "ok": true, "components": {
+    "db":       { "backend": "postgres", "status": "ok|degraded", "pendingWrites": 0 },
+    "provider": { "status": "ok|degraded|dry_run", "consecutiveFailures": 0 },
+    "grid":     { "status": "live|fallback", "source": "..." } } }
+```
+
+**Config:** `UPSTREAM_TIMEOUT_MS` (120000), `UPSTREAM_MAX_RETRIES` (2), `UPSTREAM_RETRY_BASE_MS`
+(250), `UPSTREAM_RETRY_JITTER` (true), `FALLBACK_MODEL` (none); `DATABASE_CONNECT_TIMEOUT_MS`
+(5000), `DATABASE_STATEMENT_TIMEOUT_MS` (8000), `DATABASE_MAX_BUFFERED_WRITES` (10000). Failures
+are exercised by `test/upstream.test.js` + `test/resilience.test.js` with injected fakes (offline).
+
+## Concurrency & load
+
+Joule is proven correct under sustained parallel traffic — not just fast. A dependency-free
+harness fires N concurrent clients (a mix of cache hits/misses, small- and large-routed prompts,
+agent sessions, and a tight-budget burst) and then checks that the numbers still reconcile:
+
+```bash
+# terminal 1 — a DRY_RUN server (offline, deterministic, free)
+BUDGET_ENFORCE=true MAX_CALLS_PER_SESSION=50 DRY_RUN=true node src/server.js
+# terminal 2 — 100 concurrent clients, 3000 requests
+LOAD_CONCURRENCY=100 LOAD_REQUESTS=3000 node scripts/loadtest.js http://localhost:3000
+```
+
+**Results (100 concurrent clients, 3000 requests, DRY_RUN — Joule's own overhead):**
+
+| Throughput | p50 | p95 | p99 | errors | non-200 |
+|---|---|---|---|---|---|
+| **~1,780 req/s** | 50 ms | 74 ms | 119 ms | 0 | 0 |
+
+Correctness under load (all pass): **conservation** (`routed_small + routed_large == total`, nothing
+lost or double-counted), **reconciliation** (`/api/stats` == `/api/report` == store, byte-identical
+after thousands of concurrent writes), **cache integrity** (concurrent identical requests hit the
+cache without corruption), **budget integrity** (with a cap of K, exactly K succeed and the rest get
+429 — never K+1), and **no leaked reservations**. These invariants are also protected in the suite by
+`test/loadtest.test.js`. Config: `CACHE_MAX_ENTRIES` bounds the exact-cache so memory can't grow
+unbounded.
 
 ## Caching — the risk-free savings lever (Layer 1)
 
@@ -426,9 +538,10 @@ Secrets are declared `sync: false` in the Blueprint — you set them in the dash
 in the repo. `.env` is git-ignored.
 
 > **Free-tier caveats.** The instance **spins down after ~15 min idle** (slow first request
-> after) and the disk is **ephemeral** — `data/log.jsonl` resets on every deploy/restart, so
-> accumulated totals are not durable. Fine for a demo; for production point `src/store.js` at
-> Postgres/ClickHouse (the interface is tiny and documented in the file) and re-run the demo.
+> after) and the local disk is **ephemeral** — on the `memory` backend `data/log.jsonl` resets
+> on every deploy/restart. For durable totals set `DATABASE_URL` (Supabase/RDS/local Postgres):
+> the store switches to the `postgres` backend automatically and data survives restarts. See
+> [Persistence — Postgres with a memory fallback](#persistence--postgres-with-a-memory-fallback).
 
 ### Other hosts / Docker
 

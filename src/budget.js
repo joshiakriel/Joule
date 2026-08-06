@@ -20,11 +20,12 @@ const config = require("./config");
 const dayKey = (ts) => new Date(ts).toISOString().slice(0, 10);
 const opts = () => config.budget;
 
-let committed, reserved, sessionCalls, terminated, events, seq, rejected, wouldReject;
+let committed, reserved, sessionCalls, reservedCalls, terminated, events, seq, rejected, wouldReject;
 function reset() {
   committed = { global: 0, byDay: new Map(), bySession: new Map(), byKey: new Map() };
   reserved = { global: 0, byDay: new Map(), bySession: new Map(), byKey: new Map() };
   sessionCalls = new Map();
+  reservedCalls = new Map();  // IN-FLIGHT call count per session (reserved, not yet committed)
   terminated = new Map();   // sessionId -> { reason, at }
   events = [];              // audit trail: { ts, action, scope, key, limit, spent, sessionId }
   seq = 0; rejected = 0; wouldReject = 0;
@@ -81,9 +82,12 @@ function reserve({ sessionId, estCostUsd, maxCostUsd, now = Date.now() }) {
       if (o.enforce) return reject({ scope: "request", limit: maxCostUsd, spent: 0, wouldBe: estCostUsd });
       flagged = true; wouldReject++;
     }
-    // per-session call cap (block) -> terminate on breach
-    if (o.maxCallsPerSession > 0 && sessionId && (sessionCalls.get(sessionId) || 0) >= o.maxCallsPerSession) {
-      if (o.enforce) { terminated.set(sessionId, { reason: "max calls per session", at: new Date().toISOString() }); return reject({ scope: "session-calls", key: sessionId, limit: o.maxCallsPerSession, spent: sessionCalls.get(sessionId) || 0, reason: "max calls per session" }); }
+    // per-session call cap (block) -> terminate on breach. COUNT IN-FLIGHT RESERVATIONS,
+    // not just committed calls: under concurrency many requests reserve before any commits,
+    // so counting committed-only would admit K+N. reservedCalls is bumped atomically below.
+    const callsInUse = (sessionCalls.get(sessionId) || 0) + (reservedCalls.get(sessionId) || 0);
+    if (o.maxCallsPerSession > 0 && sessionId && callsInUse >= o.maxCallsPerSession) {
+      if (o.enforce) { terminated.set(sessionId, { reason: "max calls per session", at: new Date().toISOString() }); return reject({ scope: "session-calls", key: sessionId, limit: o.maxCallsPerSession, spent: callsInUse, reason: "max calls per session" }); }
       flagged = true; wouldReject++;
     }
     // cost budgets
@@ -98,8 +102,9 @@ function reserve({ sessionId, estCostUsd, maxCostUsd, now = Date.now() }) {
         } else { record({ action: bud.action, scope: bud.scope, key: bud.key, limit: bud.limit, spent: bud.spent, budgetId: bud.id }); } // warn/throttle: allow
       }
     }
-    // apply reservation
+    // apply reservation (cost + in-flight call count) — atomic (synchronous)
     reserved.global += estCostUsd; bump(reserved.byDay, day, estCostUsd); bump(reserved.bySession, sessionId || null, estCostUsd);
+    if (sessionId) bump(reservedCalls, sessionId, 1);
     return { ok: true, id: "rv-" + (seq++), est: estCostUsd, day, sessionId: sessionId || null, wouldReject: flagged };
   } catch (err) {
     // engine error: fail_open allows (log loudly), fail_closed rejects
@@ -109,11 +114,14 @@ function reserve({ sessionId, estCostUsd, maxCostUsd, now = Date.now() }) {
   }
 }
 
-function dropReservation(rv) { reserved.global -= rv.est; bump(reserved.byDay, rv.day, -rv.est); bump(reserved.bySession, rv.sessionId, -rv.est); }
+function dropReservation(rv) {
+  reserved.global -= rv.est; bump(reserved.byDay, rv.day, -rv.est); bump(reserved.bySession, rv.sessionId, -rv.est);
+  if (rv.sessionId) { bump(reservedCalls, rv.sessionId, -1); if ((reservedCalls.get(rv.sessionId) || 0) <= 0) reservedCalls.delete(rv.sessionId); }
+}
 function commit(rv, actualCostUsd) {
   if (!rv || !rv.id) return;
-  if (!rv.failedOpen) dropReservation(rv);
-  commitRaw(actualCostUsd || 0, rv.sessionId, Date.parse(rv.day));
+  if (!rv.failedOpen) dropReservation(rv);   // frees the in-flight cost + call slot...
+  commitRaw(actualCostUsd || 0, rv.sessionId, Date.parse(rv.day)); // ...then records it as committed
 }
 function release(rv) { if (rv && rv.id && !rv.failedOpen) dropReservation(rv); }
 
@@ -123,7 +131,7 @@ function stats(now = Date.now()) {
     enforce: o.enforce, failMode: o.failMode,
     limits: { globalUsd: o.globalUsd, dailyUsd: o.dailyUsd, sessionUsd: o.sessionUsd, maxCallsPerSession: o.maxCallsPerSession },
     used: { global: committed.global, today: committed.byDay.get(day) || 0 },
-    reserved: { global: reserved.global },
+    reserved: { global: reserved.global, calls: [...reservedCalls.values()].reduce((a, b) => a + b, 0) },
     remaining: {
       global: o.globalUsd > 0 ? Math.max(0, o.globalUsd - usedGlobal()) : null,
       today: o.dailyUsd > 0 ? Math.max(0, o.dailyUsd - usedDay(day)) : null
