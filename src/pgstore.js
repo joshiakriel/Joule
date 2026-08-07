@@ -45,8 +45,24 @@ function create({ databaseUrl, ssl, poolMax = 5, connectTimeoutMs = 5000, statem
   }
 
   async function load() {
-    const { rows } = await pool.query("SELECT data, verification FROM records ORDER BY seq ASC");
+    // read every tenant's rows for the in-memory mirror via the SECURITY DEFINER reader
+    // (bypasses RLS for the boot load only; per-request writes remain RLS-checked).
+    const { rows } = await pool.query("SELECT data, verification FROM app_load_records()");
     return rows.map((r) => { const rec = r.data; if (r.verification != null) rec.verification = r.verification; return rec; });
+  }
+
+  // Run a write. If it carries a tenant, do it inside a transaction that sets
+  // app.current_tenant so Row-Level Security authorises exactly that tenant's row.
+  async function runOp(op) {
+    if (!op.tenant) return void (await pool.query(op.sql, op.params));
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT set_config('app.current_tenant', $1, true)", [op.tenant]);
+      await client.query(op.sql, op.params);
+      await client.query("COMMIT");
+    } catch (e) { try { await client.query("ROLLBACK"); } catch { /* already gone */ } throw e; }
+    finally { client.release(); }
   }
 
   function buffer(op) {
@@ -58,25 +74,28 @@ function create({ databaseUrl, ssl, poolMax = 5, connectTimeoutMs = 5000, statem
   // Run one op against the DB. On failure, mark degraded and buffer it for replay.
   async function runOrBuffer(op) {
     if (degraded) { buffer(op); return; } // stay in order: don't jump ahead of buffered ops
-    try { await pool.query(op.sql, op.params); }
+    try { await runOp(op); }
     catch (e) { degraded = true; logErr(op.label, e); buffer(op); }
   }
   const enqueue = (op) => { queue = queue.then(() => runOrBuffer(op)); return queue; };
 
   function persistAdd(rec, payload) {
     enqueue({
-      label: "add",
-      sql: `INSERT INTO records (id, ts, tier, mode, model, session, cached, data)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) ON CONFLICT (id) DO NOTHING`,
-      params: [rec.id, tsOrNull(rec.ts), rec.tier || null, rec.mode || null, rec.model || null, rec.session || null, rec.cached === true, payload]
+      label: "add", tenant: rec.tenant || null,
+      sql: `INSERT INTO records (tenant_id, id, ts, tier, mode, model, session, cached, data)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb) ON CONFLICT (id) DO NOTHING`,
+      params: [rec.tenant || null, rec.id, tsOrNull(rec.ts), rec.tier || null, rec.mode || null, rec.model || null, rec.session || null, rec.cached === true, payload]
     });
   }
-  function persistVerification(id, verificationJson) {
-    enqueue({ label: "addVerification", sql: "UPDATE records SET verification = $2::jsonb WHERE id = $1", params: [id, verificationJson] });
+  function persistVerification(id, verificationJson, tenant) {
+    enqueue({ label: "addVerification", tenant: tenant || null, sql: "UPDATE records SET verification = $2::jsonb WHERE id = $1", params: [id, verificationJson] });
   }
   function persistClear() {
     pending.length = 0; // a clear supersedes everything buffered
     enqueue({ label: "clear", sql: "TRUNCATE TABLE records RESTART IDENTITY", params: [] });
+  }
+  function persistClearTenant(tenantId) {
+    enqueue({ label: "clearTenant", tenant: tenantId, sql: "DELETE FROM records WHERE tenant_id = $1", params: [tenantId] });
   }
 
   // Attempt to reconnect + replay buffered writes in order. Called by store.recover()
@@ -87,7 +106,7 @@ function create({ databaseUrl, ssl, poolMax = 5, connectTimeoutMs = 5000, statem
       degraded = false;
       while (pending.length) {
         const op = pending[0];
-        await pool.query(op.sql, op.params);   // replay in order; throw => stop, stay degraded
+        await runOp(op);                       // replay in order (tenant GUC set); throw => stop, stay degraded
         pending.shift();
       }
       return { ok: true, pending: pending.length };
@@ -101,7 +120,7 @@ function create({ databaseUrl, ssl, poolMax = 5, connectTimeoutMs = 5000, statem
   const close = async () => { await queue.catch(() => {}); if (!_pool) await pool.end(); };
   const health = () => ({ backend: "postgres", status: degraded ? "degraded" : "ok", pendingWrites: pending.length, droppedWrites: dropped });
 
-  return { ensureSchema, load, persistAdd, persistVerification, persistClear, recover, flush, close, health, isDegraded: () => degraded };
+  return { ensureSchema, load, persistAdd, persistVerification, persistClear, persistClearTenant, recover, flush, close, health, isDegraded: () => degraded };
 }
 
 module.exports = { create };

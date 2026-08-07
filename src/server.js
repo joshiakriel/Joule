@@ -16,6 +16,7 @@ const otel = require("./otel");
 const batch = require("./batch");
 const reasoning = require("./reasoning");
 const upstream = require("./upstream");
+const tenancy = require("./tenancy");
 
 // Fill in reasoning-token counts + capping/downgrade savings (labelled estimates).
 function finalizeReasoning(info, tier, usage) {
@@ -108,6 +109,27 @@ app.use((err, _req, res, next) => {
 });
 app.use(express.static(path.join(__dirname, "..", "public")));
 
+// ---- authentication + tenant resolution (Phase 1.1) ------------------------
+// EVERY /v1 and /api request is scoped to a tenant. /v1 authenticates with a customer
+// Joule API key; /api (dashboard) with a Supabase JWT. When auth is not required
+// (DRY_RUN/dev), unauthenticated requests fall back to the default tenant so the
+// single-tenant demo + offline tests keep working — still fully tenant-scoped.
+function proxyAuth(req, res, next) {
+  const t = tenancy.resolveFromApiKey(req.get("authorization"));
+  if (t) { req.tenant = t; return next(); }
+  if (!config.auth.required) { req.tenant = tenancy.defaultTenant(); return next(); }
+  return res.status(401).json({ error: { message: "missing or invalid Joule API key", type: "invalid_request_error", code: "unauthenticated" } });
+}
+function dashAuth(req, res, next) {
+  if (req.path === "/health") return next(); // liveness probe stays open
+  const t = tenancy.resolveFromJwt(req.get("authorization"));
+  if (t) { req.tenant = t; return next(); }
+  if (!config.auth.required) { req.tenant = tenancy.defaultTenant(); return next(); }
+  return res.status(401).json({ error: { message: "authentication required", type: "invalid_request_error", code: "unauthenticated" } });
+}
+app.use("/v1", proxyAuth);
+app.use("/api", dashAuth);
+
 // ---- tiny normalized cache (exact-match after normalization) ----
 const cache = new Map(); // key -> { completion, ts }
 const norm = (s) => (s || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -157,12 +179,12 @@ const sessionOf = (req) => {
 // meter + log a request identically for streaming and non-streaming paths.
 // Returns the compute result with the stored record attached as `.rec` (so the
 // caller can hand it to the background verifier).
-function meterAndLog({ started, mode, model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText, completionText, prefixCache, semantic, batch, reasoning }) {
+function meterAndLog({ started, tenant, mode, model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText, completionText, prefixCache, semantic, batch, reasoning }) {
   // A semantic hit serves a stored answer, so the model recompute is avoided (cache-like);
   // its embedding cost is tracked separately on the semantic savings line.
   const m = compute({ model, tier, promptTokens, completionTokens, gPerKwh: grid.gPerKwh, cached: mode === "cache" || mode === "semantic_cache" });
   const rec = {
-    ts: new Date().toISOString(), mode, cached: mode === "cache",
+    ts: new Date().toISOString(), tenant: tenant || tenancy.DEFAULT_TENANT_ID, mode, cached: mode === "cache",
     model, tier, signals: decision.signals, confidence: decision.confidence,
     promptTokens, completionTokens, totalTokens: m.totalTokens,
     actual: m.actual, baseline: m.baseline, saved: m.saved,
@@ -213,7 +235,7 @@ function streamText(res, { id, created, model, content }) {
 // headers here (they're flushed before usage is known) — streamed requests are
 // metered via the store, so they still appear in /api/stats and /api/report.
 // ---------------------------------------------------------------------------
-async function handleStreaming({ res, started, body, userText, decision, tier, model, cacheKey, grid, session, qualityEscalated, routing, reservation, reasoningInfo, reasoningPlan }) {
+async function handleStreaming({ res, started, tenant, body, userText, decision, tier, model, cacheKey, grid, session, qualityEscalated, routing, reservation, reasoningInfo, reasoningPlan }) {
   const id = "joule-stream-" + started;
   const created = Math.floor(started / 1000);
 
@@ -225,7 +247,7 @@ async function handleStreaming({ res, started, body, userText, decision, tier, m
     streamText(res, { id, created, model, content });
     const promptTokens = cached.usage?.prompt_tokens ?? estTokens(userText);
     const completionTokens = cached.usage?.completion_tokens ?? estTokens(content);
-    const mCache = meterAndLog({ started, mode: "cache", model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: content });
+    const mCache = meterAndLog({ started, tenant, mode: "cache", model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: content });
     budget.commit(reservation, mCache.actual.costUsd); if (reservation) reservation.committed = true;
     return;
   }
@@ -239,7 +261,7 @@ async function handleStreaming({ res, started, body, userText, decision, tier, m
     const completionTokens = estTokens(answer);
     cacheSet(cacheKey, buildCompletion({ id, created, model, content: answer, promptTokens, completionTokens }));
     const dryPrefix = prefixCacheSavings({ model, tier, cachedInputTokens: Math.round(promptTokens * config.cache.dryRunPrefixRate), writeInputTokens: 0 });
-    const mDry = meterAndLog({ started, mode: "dry_run", model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: answer, prefixCache: dryPrefix, reasoning: finalizeReasoning(reasoningInfo, tier, null) });
+    const mDry = meterAndLog({ started, tenant, mode: "dry_run", model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: answer, prefixCache: dryPrefix, reasoning: finalizeReasoning(reasoningInfo, tier, null) });
     budget.commit(reservation, mDry.actual.costUsd); if (reservation) reservation.committed = true;
     verify.maybeVerify({ rec: mDry.rec, userText, answer, body });
     return;
@@ -308,7 +330,7 @@ async function handleStreaming({ res, started, body, userText, decision, tier, m
   if (!streamBroke) cacheSet(cacheKey, buildCompletion({ id, created, model, content: acc, promptTokens, completionTokens })); // never cache a partial answer
   const cuLive = extractCacheUsage(usage);
   const livePrefix = prefixCacheSavings({ model, tier, cachedInputTokens: cuLive.cachedInputTokens, writeInputTokens: cuLive.writeInputTokens });
-  const mLive = meterAndLog({ started, mode: "live", model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: acc, prefixCache: livePrefix, reasoning: finalizeReasoning(reasoningInfo, tier, usage) });
+  const mLive = meterAndLog({ started, tenant, mode: "live", model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: acc, prefixCache: livePrefix, reasoning: finalizeReasoning(reasoningInfo, tier, usage) });
   budget.commit(reservation, mLive.actual.costUsd); if (reservation) reservation.committed = true; // settle exactly once
   if (!streamBroke) verify.maybeVerify({ rec: mLive.rec, userText, answer: acc, body, completion: buildCompletion({ id, created, model, content: acc, promptTokens, completionTokens }) });
 }
@@ -324,18 +346,19 @@ app.post("/v1/chat/completions", async (req, res) => {
     const messages = body.messages || [];
     const userText = lastUserText(messages);
     const session = sessionOf(req);
+    const tenant = req.tenant.id;   // resolved by proxyAuth; scopes routing, cache, budget, metering
 
     // 1) classify + route
     const decision = classify(userText);
     const routed = config.routingEnabled;
     let tier = routed ? decision.tier : tierForModel(body.model);
-    // Quality gate: for small-classified requests, keep small only when the
-    // calibrated score clears the conformal threshold (once calibrated); otherwise
+    // Quality gate: for small-classified requests, keep small only when the tenant's
+    // calibrated score clears its conformal threshold (once calibrated); otherwise
     // fall back to the classifier/safety behaviour. Honours X-Joule-Quality-Floor.
     let qualityEscalated = false, routing = null;
     if (routed && tier === "small") {
       const floor = parseFloat(req.get("x-joule-quality-floor"));
-      routing = verify.gate(decision, floor);
+      routing = verify.gate(decision, floor, tenant);
       if (!routing.routeSmall) { tier = "large"; qualityEscalated = true; }
     }
     let model = routed ? selectModel(tier) : (body.model || selectModel(tier));
@@ -356,21 +379,21 @@ app.post("/v1/chat/completions", async (req, res) => {
       }
     }
 
-    // 2) cache
-    const cacheKey = model + "::" + norm(userText);
+    // 2) cache — namespaced by tenant so a tenant can NEVER receive another's cached response
+    const cacheKey = tenant + "::" + model + "::" + norm(userText);
     const grid = await getIntensity();
 
     // 2b) budget: reserve the estimated cost BEFORE any model call. Enforcement
     // rejects (402) here — no model is called. Metering-only mode flags but allows.
     reservation = budget.reserve({
-      sessionId: session, estCostUsd: estimateRequestCost(model, tier, userText),
+      tenantId: tenant, sessionId: session, estCostUsd: estimateRequestCost(model, tier, userText),
       maxCostUsd: parseFloat(req.get("x-joule-max-cost")), now: started
     });
     if (!reservation.ok) return res.status(reservation.status || 429).json({ error: { message: reservation.message, budget: reservation.detail } });
 
     // streaming branch — SSE out, metered via the store (not response headers)
     if (body.stream === true) {
-      return await handleStreaming({ res, started, body, userText, decision, tier, model, cacheKey, grid, session, qualityEscalated, routing, reservation, reasoningInfo, reasoningPlan });
+      return await handleStreaming({ res, started, tenant, body, userText, decision, tier, model, cacheKey, grid, session, qualityEscalated, routing, reservation, reasoningInfo, reasoningPlan });
     }
 
     const cachedCompletion = cacheGet(cacheKey);
@@ -380,7 +403,9 @@ app.post("/v1/chat/completions", async (req, res) => {
     // Namespaced by tenant/project/user-tier/model/system-prompt for ISOLATION;
     // sensitive prompts (patterns or X-Joule-Cache-Bypass) skip the semantic layer.
     const systemText = messages.filter((mm) => mm && mm.role === "system").map((mm) => typeof mm.content === "string" ? mm.content : "").join(" ");
-    const semCtx = { tenant: req.get("x-joule-tenant") || null, project: req.get("x-joule-project") || null, userTier: req.get("x-joule-user-tier") || null, model, systemHash: systemText };
+    // tenant comes from the AUTHENTICATED identity (not a spoofable header); project/user-tier
+    // are optional SUB-scopes within the tenant. A semantic hit can never cross tenants.
+    const semCtx = { tenant: tenant, project: req.get("x-joule-project") || null, userTier: req.get("x-joule-user-tier") || null, model, systemHash: systemText };
     const cacheBypass = semcache.isBypassed(userText, req.get("x-joule-cache-bypass"));
     let semLookup = null;
     if (!cachedCompletion && semcache.enabled()) {
@@ -450,7 +475,7 @@ app.post("/v1/chat/completions", async (req, res) => {
 
     // 3) meter + 4) log (shared with the streaming path)
     const latencyTolerant = /^(1|true|yes)$/i.test(req.get("x-joule-latency-tolerant") || "");
-    const m = meterAndLog({ started, mode, model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: completion.choices?.[0]?.message?.content || "", prefixCache, semantic, reasoning: finalizeReasoning(reasoningInfo, tier, completion.usage), batch: (latencyTolerant && mode !== "cache") ? { discount: config.batch.discount } : undefined });
+    const m = meterAndLog({ started, tenant, mode, model, tier, decision, grid, promptTokens, completionTokens, session, qualityEscalated, routing, promptText: userText, completionText: completion.choices?.[0]?.message?.content || "", prefixCache, semantic, reasoning: finalizeReasoning(reasoningInfo, tier, completion.usage), batch: (latencyTolerant && mode !== "cache") ? { discount: config.batch.discount } : undefined });
     budget.commit(reservation, m.actual.costUsd); reservation.committed = true; // reconcile reservation to actual spend
 
     // 5) expose metrics on headers (drop-in clients still get a clean OpenAI body)
@@ -478,8 +503,8 @@ app.post("/v1/chat/completions", async (req, res) => {
 
 // Combine per-view verification stats (from the filtered totals) with the global
 // rolling-quality + safety-mode state. `score` is null until >=1 sample verified.
-function qualityBlock(totals) {
-  const q = verify.qualityStats();
+function qualityBlock(totals, tenant) {
+  const q = verify.qualityStats(tenant);
   return {
     score: totals.qualityScore,                                                     // avg quality of verified records IN VIEW
     verified: totals.verified,
@@ -514,7 +539,7 @@ function deploymentBlock() {
 // Process one submitted item: same classify->route->meter pipeline, metered at the
 // batch discount (zero quality risk — same model/output, just async). No cache/
 // semantic/verify in the batch path (kept self-contained).
-async function processBatchItem(item, session, grid) {
+async function processBatchItem(item, session, grid, tenant) {
   const messages = item.messages || [];
   const userText = lastUserText(messages);
   const decision = classify(userText);
@@ -538,14 +563,14 @@ async function processBatchItem(item, session, grid) {
     promptTokens = completion.usage?.prompt_tokens ?? estTokens(userText);
     completionTokens = completion.usage?.completion_tokens ?? estTokens(JSON.stringify(completion.choices?.[0]?.message?.content || ""));
   }
-  const m = meterAndLog({ started, mode: "batch", model, tier, decision, grid, promptTokens, completionTokens, session: item.session || session, routing: null, promptText: userText, completionText: completion.choices?.[0]?.message?.content || "", batch: { discount: config.batch.discount } });
+  const m = meterAndLog({ started, tenant, mode: "batch", model, tier, decision, grid, promptTokens, completionTokens, session: item.session || session, routing: null, promptText: userText, completionText: completion.choices?.[0]?.message?.content || "", batch: { discount: config.batch.discount } });
   return { custom_id: item.custom_id ?? null, tier, model, completion, saved_usd: m.rec.batch.savedUsd };
 }
 
-async function runBatch(job, items, session) {
+async function runBatch(job, items, session, tenant) {
   const grid = await getIntensity();
   for (const item of items) {
-    try { job.results.push(await processBatchItem(item, session, grid)); }
+    try { job.results.push(await processBatchItem(item, session, grid, tenant)); }
     catch (err) { job.results.push({ custom_id: item.custom_id ?? null, error: scrub(err.message) }); }
     job.completed++;
   }
@@ -588,15 +613,16 @@ function cacheBlock(totals) {
 }
 
 // ---- dashboard data ----
-app.get("/api/stats", async (_req, res) => {
+app.get("/api/stats", async (req, res) => {
+  const tenant = req.tenant.id;
   const grid = await getIntensity();
-  const totals = store.aggregate();
+  const totals = store.aggregate(store.predicateFor({ tenant })); // TENANT-SCOPED
   res.json({
     deployment: deploymentBlock(),
     cache: cacheBlock(totals),
     batch: batchBlock(totals),
     reasoning: reasoningBlock(totals),
-    budget: budget.stats(),
+    budget: budget.stats(tenant),
     config: {
       dryRun: config.dryRun,
       routingEnabled: config.routingEnabled,
@@ -607,8 +633,8 @@ app.get("/api/stats", async (_req, res) => {
     },
     grid,
     totals,
-    quality: qualityBlock(totals),
-    recent: store.recent(25)
+    quality: qualityBlock(totals, tenant),
+    recent: store.recent(25, tenant)
   });
 });
 
@@ -626,17 +652,18 @@ function parseFilter(q) {
 // real log and filtered by range/tier/mode/model — the dashboard renders this so
 // UI and server always agree. /v1/chat/completions behaviour is unchanged.
 app.get("/api/summary", (req, res) => {
-  const sum = store.summary(parseFilter(req.query));
-  sum.quality = qualityBlock(sum.totals);
+  const tenant = req.tenant.id;
+  const sum = store.summary({ ...parseFilter(req.query), tenant }); // TENANT-SCOPED
+  sum.quality = qualityBlock(sum.totals, tenant);
   sum.cache = cacheBlock(sum.totals);
   sum.batch = batchBlock(sum.totals);
   sum.reasoning = reasoningBlock(sum.totals);
   res.json(sum);
 });
 
-// Truly clear the request log (in memory + on disk). Destructive by design.
-app.post("/api/clear", (_req, res) => {
-  const removed = store.clear();
+// Clear ONLY the caller's tenant data (in memory + durably). Destructive by design.
+app.post("/api/clear", (req, res) => {
+  const removed = store.clear(req.tenant.id);
   res.json({ cleared: true, removed });
 });
 
@@ -647,14 +674,17 @@ app.post("/v1/batch", (req, res) => {
   if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: { message: "requests[] required" } });
   if (items.length > config.batch.maxSize) return res.status(400).json({ error: { message: `batch too large (max ${config.batch.maxSize})` } });
   const session = sessionOf(req);
+  const tenant = req.tenant.id;
   const job = batch.submit(items.length);
-  runBatch(job, items, session).catch((err) => { job.status = "failed"; job.error = scrub(err.message); });
+  job.tenant = tenant; // tag the job so it can never be polled cross-tenant
+  runBatch(job, items, session, tenant).catch((err) => { job.status = "failed"; job.error = scrub(err.message); });
   res.status(202).json({ id: job.id, status: job.status, count: job.count });
 });
 
 app.get("/v1/batch/:id", (req, res) => {
   const job = batch.get(req.params.id);
-  if (!job) return res.status(404).json({ error: { message: "batch not found" } });
+  // tenant isolation: a missing job and another tenant's job are indistinguishable (404)
+  if (!job || (job.tenant && job.tenant !== req.tenant.id)) return res.status(404).json({ error: { message: "batch not found" } });
   res.json({ id: job.id, status: job.status, count: job.count, completed: job.completed, error: job.error, totals: job.totals, results: job.status === "completed" ? job.results : undefined });
 });
 
@@ -684,23 +714,24 @@ function batchBlock(totals) {
 }
 
 // Quantified cache advisory — actionable findings with before/after + $ impact (estimates).
-app.get("/api/advisory", (_req, res) => {
-  res.json(cacheadvice.advisory(store.all()));
+app.get("/api/advisory", (req, res) => {
+  res.json(cacheadvice.advisory(store.all(req.tenant.id)));
 });
 
 // Budget definitions + live spend/remaining + terminated sessions + recent events.
-app.get("/api/budgets", (_req, res) => {
-  res.json({ ...budget.stats(), definitions: budget.budgets() });
+app.get("/api/budgets", (req, res) => {
+  res.json({ ...budget.stats(req.tenant.id), definitions: budget.budgets(req.tenant.id) });
 });
 
 // Cumulative ROI since day one — real logged data only; empty state when no history.
-app.get("/api/roi", (_req, res) => {
-  const rollups = store.dailyRollups();
+app.get("/api/roi", (req, res) => {
+  const tenant = req.tenant.id;
+  const rollups = store.dailyRollups(tenant);
   const subMonthly = config.subscriptionCostMonthly;
   if (!rollups.length) {
     return res.json({ empty: true, startDate: null, lifetime: null, series: [], net: null, subscriptionMonthly: subMonthly });
   }
-  const totals = store.aggregate();
+  const totals = store.aggregate(store.predicateFor({ tenant }));
   const startDate = rollups[0].date, endDate = rollups[rollups.length - 1].date;
   const days = Math.max(1, Math.round((new Date(endDate + "T00:00:00Z") - new Date(startDate + "T00:00:00Z")) / 86400000) + 1);
   const months = days / 30.4375;
@@ -805,9 +836,10 @@ app.post("/api/config", (req, res) => {
 
 // ---- audit-style report (JSON or CSV) — respects the active filters ----
 app.get("/api/report", (req, res) => {
-  const filter = parseFilter(req.query);
+  const tenant = req.tenant.id;
+  const filter = { ...parseFilter(req.query), tenant }; // TENANT-SCOPED
   const pred = store.predicateFor(filter);
-  const rows = store.all().filter(pred);
+  const rows = store.all(tenant).filter(pred);
   const totals = store.aggregate(pred);
   const period = {
     from: rows[0]?.ts || null,
@@ -820,7 +852,7 @@ app.get("/api/report", (req, res) => {
     res.set("content-disposition", 'attachment; filename="joule-report.csv"');
     return res.send(store.toCsv(pred));
   }
-  const q = verify.qualityStats();
+  const q = verify.qualityStats(tenant);
   res.set("content-disposition", 'attachment; filename="joule-report.json"');
   res.json({
     report: "Joule — AI cost & emissions report",
@@ -830,7 +862,7 @@ app.get("/api/report", (req, res) => {
     cache: cacheBlock(totals),      // separate cache savings line (zero quality risk) + advisory
     batch: batchBlock(totals),      // batch-discount savings line (zero quality risk)
     reasoning: reasoningBlock(totals), // reasoning-token capping / downgrade savings line
-    budget: budget.stats(),         // limits, used, remaining, rejections (enforcement prevents overspend)
+    budget: budget.stats(tenant),   // limits, used, remaining, rejections (enforcement prevents overspend)
     methodology: {
       cost: "Exact: provider-returned token usage x configured per-model prices.",
       energy: "Estimated, DECODE-WEIGHTED: base[tier] + perKTokOut[tier] x (completion_tokens/1000) + perKTokIn[tier] x (prompt_tokens/1000), with perKTokIn an order of magnitude below perKTokOut. Measurement studies show inference energy is dominated by the decode phase — near-zero correlation with prompt length, scaling with tokens generated. Anchored to GPU characterisation (ML.ENERGY / Zeus / TokenPowerBench methodology) with IEA 'Energy & AI' for order-of-magnitude sanity. Configurable in src/config.js.",

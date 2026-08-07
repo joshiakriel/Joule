@@ -30,137 +30,147 @@ const estTokens = (text) => Math.max(1, Math.round((text || "").length / 4));
 const clamp01 = (x) => (Number.isFinite(x) ? Math.max(0, Math.min(1, x)) : 0);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// ---- runtime state (initialised from config.verify; test hooks can adjust) ----
-let opts = { ...config.verify };
-let scores = [];                 // rolling judge scores (v1 safety mode + backward-compat UI)
-let verifiedCount = 0, sampledCount = 0, lowAgreementCount = 0;
-let safety = false;
-const overhead = { tokens: 0, costUsd: 0, energyWh: 0, carbonG: 0 };
-let inFlight = 0;
+// ---- runtime state — PER-TENANT (Phase 1.1). Each tenant has its own calibration
+// (via calibrate.for), conformal threshold, ACI controller, rolling scores, safety mode
+// and verification overhead — one tenant's quality signal never leaks into another's. ----
+const DEFAULT_TENANT = config.auth.defaultTenantId;
+let opts = { ...config.verify };               // config is global; STATE is per-tenant
+let inFlight = 0;                              // global in-flight verification counter (idle waiters)
 let idleWaiters = [];
 let forcedScore = opts.forceScore;
 let testDelayMs = 0;
-let rng = Math.random;                     // injectable for tests (order randomisation)
-let conf = { threshold: 1.01, coverage: null, riskBound: null, n: 0, alpha: opts.targetRiskAlpha, ready: false };
-let aci = null;                            // adaptive-conformal controller (when conformalMode==="adaptive")
-const liveRaw = [];                        // recent routing signals of live traffic (drift)
+let rng = Math.random;                          // injectable for tests (order randomisation)
 
 function makeAci() { return conformal.createAci({ alpha: opts.targetRiskAlpha, gamma: opts.aciGamma, gammaDrift: opts.aciGammaDrift, window: opts.aciWindow }); }
 
+const tstate = new Map();                       // tenantId -> verify state
+function S(tenant) {
+  const id = tenant || DEFAULT_TENANT;
+  if (!tstate.has(id)) tstate.set(id, {
+    scores: [], verifiedCount: 0, sampledCount: 0, lowAgreementCount: 0, safety: false,
+    overhead: { tokens: 0, costUsd: 0, energyWh: 0, carbonG: 0 },
+    conf: { threshold: 1.01, coverage: null, riskBound: null, n: 0, alpha: opts.targetRiskAlpha, ready: false },
+    aci: opts.conformalMode === "adaptive" ? makeAci() : null,
+    liveRaw: []
+  });
+  return tstate.get(id);
+}
+const cal = (tenant) => calibrate.for(tenant || DEFAULT_TENANT);
+
 function reset() {
   opts = { ...config.verify };
-  scores = []; verifiedCount = 0; sampledCount = 0; lowAgreementCount = 0; safety = false;
-  overhead.tokens = overhead.costUsd = overhead.energyWh = overhead.carbonG = 0;
+  tstate.clear();
   forcedScore = opts.forceScore; testDelayMs = 0; rng = Math.random;
-  conf = { threshold: 1.01, coverage: null, riskBound: null, n: 0, alpha: opts.targetRiskAlpha, ready: false };
-  aci = opts.conformalMode === "adaptive" ? makeAci() : null;
-  liveRaw.length = 0;
   calibrate.reset();
 }
 function configure(partial) {
   const prevMode = opts.conformalMode;
   opts = { ...opts, ...partial };
-  // switching mode re-inits the controller so static never reads a stale ACI window
-  if (opts.conformalMode !== prevMode) aci = opts.conformalMode === "adaptive" ? makeAci() : null;
+  // switching mode rebuilds each tenant's controller so static never reads a stale ACI window
+  if (opts.conformalMode !== prevMode) tstate.clear();
 }
 function setForcedScore(x) { forcedScore = x; }
 function setTestDelay(ms) { testDelayMs = ms; }
 function setRng(fn) { rng = fn || Math.random; }
 
 const judgeModelList = () => (opts.judgeModels && opts.judgeModels.length ? opts.judgeModels : [config.modelLarge]);
-const rollingScore = () => (scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null);
-const safetyMode = () => safety;
+const rollingScore = (tenant) => { const s = S(tenant).scores; return s.length ? s.reduce((a, b) => a + b, 0) / s.length : null; };
+const safetyMode = (tenant) => S(tenant).safety;
 const inFlightCount = () => inFlight;
 function whenIdle() { return inFlight === 0 ? Promise.resolve() : new Promise((r) => idleWaiters.push(r)); }
 function settleIdle() { if (inFlight === 0) idleWaiters.splice(0).forEach((r) => r()); }
 
-// ---- init: load calibration + migrate existing judge scores ----
+// ---- init: load calibration + migrate existing judge scores (per tenant) ----
 function init(dir) {
   calibrate.setDir(dir);
   calibrate.load();
-  if (!calibrate.size()) migrateFromStore(store.all());
-  recomputeConformal();
+  migrateFromStore(store.all());
+  for (const tid of store.tenants()) recomputeConformal(tid);
 }
 
-// Existing logged judge scores are readable — seed the calibration set from them
-// rather than discarding (raw from stored routing signal, else a confidence proxy).
+// Existing logged judge scores are readable — seed each tenant's calibration set from
+// its own records (raw from stored routing signal, else a confidence proxy).
 function migrateFromStore(records) {
   let seeded = 0;
+  const touched = new Set();
   for (const r of records || []) {
     if (!r.verification) continue;
     const raw = (r.routing && Number.isFinite(r.routing.raw)) ? r.routing.raw : (Number.isFinite(r.confidence) ? r.confidence / 100 : null);
     if (raw == null) continue;
     const label = (r.verification.checksPassed && r.verification.judgeScore >= opts.judgeAcceptThreshold) ? 1 : 0;
-    calibrate.add(raw, label); seeded++;
+    cal(r.tenant).add(raw, label); touched.add(r.tenant || DEFAULT_TENANT); seeded++;
   }
-  if (seeded) { calibrate.fit(); calibrate.persist(); }
+  for (const tid of touched) cal(tid).fit();
+  if (seeded) calibrate.persist();
   return seeded;
 }
 
-function recomputeConformal() { conf = conformal.compute(calibrate.calibrationPoints(), opts.targetRiskAlpha); }
+function recomputeConformal(tenant) { S(tenant).conf = conformal.compute(cal(tenant).calibrationPoints(), opts.targetRiskAlpha); }
 
-// Fold one verified outcome into the threshold. Adaptive (default) nudges alpha_t
-// online (self-correcting through drift); static re-solves the full-set CRC bound.
-function applyVerifiedSample(raw, label) {
+// Fold one verified outcome into the tenant's threshold. Adaptive nudges alpha_t online;
+// static re-solves the full-set CRC bound.
+function applyVerifiedSample(raw, label, tenant) {
+  const st = S(tenant);
   if (opts.conformalMode === "adaptive") {
-    if (!aci) aci = makeAci();
-    const p = calibrate.predict(raw);
-    aci.update({ p, label: label ? 1 : 0, drift: driftStatus().drift });
-    const s = aci.state();
-    conf = { threshold: s.threshold, coverage: s.rollingCoverage, riskBound: null, n: calibrate.size(), alpha: opts.targetRiskAlpha, ready: calibrate.ready(opts.minCalibrationN) && s.threshold <= 1, aci: s };
+    if (!st.aci) st.aci = makeAci();
+    const p = cal(tenant).predict(raw);
+    st.aci.update({ p, label: label ? 1 : 0, drift: driftStatus(tenant).drift });
+    const s = st.aci.state();
+    st.conf = { threshold: s.threshold, coverage: s.rollingCoverage, riskBound: null, n: cal(tenant).size(), alpha: opts.targetRiskAlpha, ready: cal(tenant).ready(opts.minCalibrationN) && s.threshold <= 1, aci: s };
   } else {
-    recomputeConformal();
+    recomputeConformal(tenant);
   }
 }
 
-// ---- rolling judge score + v1 safety-mode transitions (backward-compat) ----
-function pushScore(score) {
-  scores.push(score);
-  while (scores.length > opts.rollingWindow) scores.shift();
-  verifiedCount++;
-  const r = rollingScore();
-  if (r == null || scores.length < opts.minSamples) return;
-  if (!safety && r < opts.qualityThreshold) {
-    safety = true;
-    console.log(`[verify] SAFETY MODE ON — rolling judge quality ${r.toFixed(3)} < ${opts.qualityThreshold} (n=${scores.length}); biasing routing to large.`);
-  } else if (safety && r >= opts.qualityThreshold) {
-    safety = false;
-    console.log(`[verify] safety mode OFF — rolling judge quality ${r.toFixed(3)} ≥ ${opts.qualityThreshold} recovered.`);
+// ---- rolling judge score + v1 safety-mode transitions (per tenant) ----
+function pushScore(score, tenant) {
+  const st = S(tenant);
+  st.scores.push(score);
+  while (st.scores.length > opts.rollingWindow) st.scores.shift();
+  st.verifiedCount++;
+  const r = rollingScore(tenant);
+  if (r == null || st.scores.length < opts.minSamples) return;
+  if (!st.safety && r < opts.qualityThreshold) {
+    st.safety = true;
+    console.log(`[verify] SAFETY MODE ON (tenant ${tenant || DEFAULT_TENANT}) — rolling quality ${r.toFixed(3)} < ${opts.qualityThreshold}; biasing to large.`);
+  } else if (st.safety && r >= opts.qualityThreshold) {
+    st.safety = false;
+    console.log(`[verify] safety mode OFF (tenant ${tenant || DEFAULT_TENANT}) — rolling quality ${r.toFixed(3)} recovered.`);
   }
 }
 
-// ---- drift: compare live routing-signal mean to the calibration distribution ----
-function trackLive(raw) { liveRaw.push(raw); while (liveRaw.length > 200) liveRaw.shift(); }
-function driftStatus() {
-  const cal = calibrate.rawStats();
-  const n = liveRaw.length;
-  if (n < opts.driftMinN || cal.n < opts.minCalibrationN || cal.std <= 1e-9) {
-    return { status: n < opts.driftMinN ? "warming-up" : "ok", drift: false, liveMean: n ? liveRaw.reduce((a, b) => a + b, 0) / n : null, calMean: cal.mean, liveN: n };
+// ---- drift: compare a tenant's live routing-signal mean to its calibration distribution ----
+function trackLive(tenant, raw) { const lr = S(tenant).liveRaw; lr.push(raw); while (lr.length > 200) lr.shift(); }
+function driftStatus(tenant) {
+  const cs = cal(tenant).rawStats();
+  const lr = S(tenant).liveRaw;
+  const n = lr.length;
+  if (n < opts.driftMinN || cs.n < opts.minCalibrationN || cs.std <= 1e-9) {
+    return { status: n < opts.driftMinN ? "warming-up" : "ok", drift: false, liveMean: n ? lr.reduce((a, b) => a + b, 0) / n : null, calMean: cs.mean, liveN: n };
   }
-  const liveMean = liveRaw.reduce((a, b) => a + b, 0) / n;
-  const z = Math.abs(liveMean - cal.mean) / cal.std;
+  const liveMean = lr.reduce((a, b) => a + b, 0) / n;
+  const z = Math.abs(liveMean - cs.mean) / cs.std;
   const drift = z > opts.driftK;
-  return { status: drift ? "drift" : "ok", drift, z, liveMean, calMean: cal.mean, liveN: n };
+  return { status: drift ? "drift" : "ok", drift, z, liveMean, calMean: cs.mean, liveN: n };
 }
 
-// ---- routing gate: called for every small-CLASSIFIED request ----
-// Returns whether to keep it small. Conformal when ready; else v1 fallback. Never
-// claims a guarantee it can't back (n < MIN_CALIBRATION_N).
-function gate(decision, floor) {
+// ---- routing gate: called for every small-CLASSIFIED request (tenant-scoped) ----
+function gate(decision, floor, tenant) {
+  const st = S(tenant);
   const raw = signals.routingSignal(decision);
-  trackLive(raw);
-  const calReady = calibrate.ready(opts.minCalibrationN);
-  const p = calReady ? calibrate.predict(raw) : null;
-  const drift = driftStatus().drift;
+  trackLive(tenant, raw);
+  const calReady = cal(tenant).ready(opts.minCalibrationN);
+  const p = calReady ? cal(tenant).predict(raw) : null;
+  const drift = driftStatus(tenant).drift;
   let routeSmall, reason, guaranteed = false;
 
   if (drift) { routeSmall = false; reason = "drift-escalate"; }
   else if (Number.isFinite(floor)) { routeSmall = p != null && p >= floor; reason = routeSmall ? "floor-pass" : "floor-escalate"; }
-  else if (opts.mode === "conformal" && calReady && conf.ready) { routeSmall = p >= conf.threshold; reason = routeSmall ? "conformal-pass" : "conformal-escalate"; guaranteed = true; }
-  else if (safety) { routeSmall = false; reason = "safety-escalate"; }
+  else if (opts.mode === "conformal" && calReady && st.conf.ready) { routeSmall = p >= st.conf.threshold; reason = routeSmall ? "conformal-pass" : "conformal-escalate"; guaranteed = true; }
+  else if (st.safety) { routeSmall = false; reason = "safety-escalate"; }
   else { routeSmall = true; reason = calReady ? "insufficient-conformal-fallback" : "insufficient-data-fallback"; }
 
-  return { raw, calibratedP: p, threshold: conf.threshold, ready: calReady && conf.ready, guaranteed, drift, routeSmall, reason };
+  return { raw, calibratedP: p, threshold: st.conf.threshold, ready: calReady && st.conf.ready, guaranteed, drift, routeSmall, reason };
 }
 
 // ---- deterministic checks (guardrails; part of the label) ----
@@ -228,6 +238,8 @@ async function judgePanel(userText, answer, referenceAnswer) {
 // ---- the verification itself (background) ----
 async function runVerification(ctx) {
   const { rec, userText, answer, body, completion } = ctx;
+  const tenant = rec.tenant || DEFAULT_TENANT;
+  const st = S(tenant);
   const referenceModel = config.modelLarge;
   const gPerKwh = rec.grid.gPerKwh;
   if (testDelayMs) await sleep(testDelayMs);
@@ -265,8 +277,8 @@ async function runVerification(ctx) {
     energyWh: refM.actual.energyWh + judgeM.actual.energyWh,
     carbonG: refM.actual.carbonG + judgeM.actual.carbonG
   };
-  overhead.tokens += verifyCost.tokens; overhead.costUsd += verifyCost.costUsd;
-  overhead.energyWh += verifyCost.energyWh; overhead.carbonG += verifyCost.carbonG;
+  st.overhead.tokens += verifyCost.tokens; st.overhead.costUsd += verifyCost.costUsd;
+  st.overhead.energyWh += verifyCost.energyWh; st.overhead.carbonG += verifyCost.carbonG;
 
   store.addVerification(rec.id, {
     qualityScore, judgeScore: clamp01(panel.meanScore), judgeReason: `panel(${panel.judges.length}) agreement ${(panel.agreement * 100).toFixed(0)}%${panel.lowConfidence ? " — low-confidence" : ""}`,
@@ -275,14 +287,14 @@ async function runVerification(ctx) {
     referenceModel, verifiedAt: new Date().toISOString(), verifyCost
   });
 
-  pushScore(qualityScore);
-  if (panel.lowConfidence) { lowAgreementCount++; }
+  pushScore(qualityScore, tenant);
+  if (panel.lowConfidence) { st.lowAgreementCount++; }
   else {
-    // feed the CALIBRATION set with (routing raw signal → acceptable label)
+    // feed the tenant's CALIBRATION set with (routing raw signal → acceptable label)
     const raw = (rec.routing && Number.isFinite(rec.routing.raw)) ? rec.routing.raw : signals.routingSignal({ score: 0 });
-    calibrate.add(raw, acceptable);
-    calibrate.fit();                 // cheap for MVP-scale sets; refit-every still persists periodically
-    applyVerifiedSample(raw, acceptable); // adaptive (online) or static conformal update
+    cal(tenant).add(raw, acceptable);
+    cal(tenant).fit();               // cheap for MVP-scale sets; refit-every still persists periodically
+    applyVerifiedSample(raw, acceptable, tenant); // adaptive (online) or static conformal update
   }
 }
 
@@ -292,41 +304,44 @@ function maybeVerify(ctx) {
   if (!opts.enabled || !rec || rec.tier !== "small" || rec.mode === "cache" || rec.mode === "semantic_cache") return;
   const sample = opts.sampleRate >= 1 || rng() < opts.sampleRate;
   if (!sample) return;
-  sampledCount++; inFlight++;
+  S(rec.tenant).sampledCount++; inFlight++;
   Promise.resolve().then(() => runVerification(ctx))
     .catch((err) => console.error("[verify] verification error:", err.message))
     .finally(() => { inFlight--; settleIdle(); });
 }
 
-function qualityStats() {
-  const calN = calibrate.size();
-  const useAci = opts.conformalMode === "adaptive" && aci;
-  const guaranteeReady = opts.mode === "conformal" && calibrate.ready(opts.minCalibrationN) && conf.ready && !driftStatus().drift;
+function qualityStats(tenant) {
+  const st = S(tenant);
+  const conf = st.conf;
+  const c = cal(tenant);
+  const calN = c.size();
+  const useAci = opts.conformalMode === "adaptive" && st.aci;
+  const drift = driftStatus(tenant);
+  const guaranteeReady = opts.mode === "conformal" && c.ready(opts.minCalibrationN) && conf.ready && !drift.drift;
   return {
     enabled: opts.enabled, mode: opts.mode, sampleRate: opts.sampleRate, threshold: opts.qualityThreshold,
-    rollingScore: rollingScore(), sampleCount: scores.length, verifiedCount, sampledCount, lowAgreementCount,
-    safetyMode: safety, referenceModel: config.modelLarge, judgeModels: judgeModelList(), overhead: { ...overhead },
-    calibration: { n: calN, ready: calibrate.ready(opts.minCalibrationN), minN: opts.minCalibrationN, ece: calibrate.ece() },
+    rollingScore: rollingScore(tenant), sampleCount: st.scores.length, verifiedCount: st.verifiedCount, sampledCount: st.sampledCount, lowAgreementCount: st.lowAgreementCount,
+    safetyMode: st.safety, referenceModel: config.modelLarge, judgeModels: judgeModelList(), overhead: { ...st.overhead },
+    calibration: { n: calN, ready: c.ready(opts.minCalibrationN), minN: opts.minCalibrationN, ece: c.ece() },
     conformal: {
       alpha: conf.alpha, threshold: conf.threshold, coverage: conf.coverage, riskBound: conf.riskBound, n: conf.n, ready: conf.ready,
-      // adaptive conformal (Gibbs–Candès): self-correcting through drift
       conformalMode: opts.conformalMode,
-      workingAlpha: useAci ? aci.state().alphaT : conf.alpha,          // the online alpha_t (adaptive) or target (static)
-      rollingCoverage: useAci ? aci.state().rollingCoverage : conf.coverage, // realised coverage over the recent window
+      workingAlpha: useAci ? st.aci.state().alphaT : conf.alpha,
+      rollingCoverage: useAci ? st.aci.state().rollingCoverage : conf.coverage,
       targetCoverage: 1 - conf.alpha,
-      adaptationRate: useAci ? (driftStatus().drift ? opts.aciGammaDrift : opts.aciGamma) : null,
-      driftBoosted: Boolean(useAci && driftStatus().drift)
+      adaptationRate: useAci ? (drift.drift ? opts.aciGammaDrift : opts.aciGamma) : null,
+      driftBoosted: Boolean(useAci && drift.drift)
     },
-    drift: driftStatus(),
+    drift,
     guaranteeReady
   };
 }
 
 // Backward-compat wrapper used by the older escalation tests/paths.
-function shouldEscalate(floor) {
-  const r = rollingScore();
+function shouldEscalate(floor, tenant) {
+  const r = rollingScore(tenant);
   if (Number.isFinite(floor) && (r == null || r < floor)) return true;
-  if (safety) return rng() >= opts.probeRate;
+  if (S(tenant).safety) return rng() >= opts.probeRate;
   return false;
 }
 

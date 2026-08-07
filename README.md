@@ -244,6 +244,41 @@ database (it truncates `records`) and opt in explicitly:
 STORE_PG_TEST=1 DATABASE_URL=postgresql://…  npm test
 ```
 
+## Multi-tenancy, auth & data isolation
+
+Joule is multi-tenant: **every stored row, cache key, budget, calibration set and metric query
+is scoped to a tenant — there are no global reads.** Isolation is enforced at two layers.
+
+**How a customer's app authenticates (the `/v1` proxy).** A tenant mints a **Joule API key**
+(`jk_live_…`) and puts it in the OpenAI client exactly where the model key used to go:
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="https://your-joule-host/v1", api_key="jk_live_…")  # the tenant's Joule key
+```
+
+The key is shown **once** and stored only as a sha-256 hash (revocable). Joule resolves it to the
+tenant (cached in memory — no per-request DB hit), then uses **that tenant's own upstream provider
+key** (AES-256-GCM encrypted at rest, never logged) for the real call. A missing/invalid key → `401`.
+
+**How the dashboard authenticates (`/api/*`).** A **Supabase Auth** JWT (email/password to start,
+SSO/OIDC later). Joule verifies it locally (HS256 against `SUPABASE_JWT_SECRET` — password/session
+logic stays fully managed by Supabase) and resolves the user → tenant. `/api/health` stays open.
+
+**Two-layer isolation (defence in depth):**
+1. **App layer** — every store/cache/budget/metric read takes the authenticated `tenant_id` and
+   filters by it; the exact + semantic caches are namespaced by tenant (a tenant can never receive
+   another's cached response); budgets and calibration are per-tenant.
+2. **Database layer** — Postgres **Row-Level Security** (`ENABLE` + `FORCE`) on every tenant table
+   (`records`, `users`, `api_keys`, `tenant_secrets`), policy `tenant_id = current_setting('app.current_tenant')`.
+   Writes set that GUC per request; the DB itself refuses a cross-tenant read even if app code has a
+   bug. Pre-auth key lookup + the mirror boot-load use `SECURITY DEFINER` functions.
+
+**Config:** `AUTH_REQUIRED` (default ON in prod, OFF in DRY_RUN so offline tests run in the default
+tenant), `SUPABASE_JWT_SECRET`, `JOULE_ENC_KEY`, `JOULE_KEY_PREFIX`, `DEFAULT_TENANT_ID`. Isolation
+is protected by `test/tenancy.test.js` (incl. deliberate cross-tenant break attempts + per-tenant
+reconciliation) and `test/rls.test.js` (live-DB RLS, opt-in).
+
 ## Persistence — Postgres with a memory fallback
 
 The request log (and the async verification results attached to it) is persisted so the

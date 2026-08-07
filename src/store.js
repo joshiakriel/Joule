@@ -100,16 +100,27 @@ function add(rec) {
 function addVerification(id, verification) {
   const rec = records.find((r) => r.id === id);
   if (rec) rec.verification = verification;
-  if (backend === "postgres") { try { pg.persistVerification(id, JSON.stringify(verification)); } catch (e) { console.error("store addVerification error:", e.message); } }
+  if (backend === "postgres") { try { pg.persistVerification(id, JSON.stringify(verification), rec && rec.tenant); } catch (e) { console.error("store addVerification error:", e.message); } }
   else { try { fs.appendFileSync(LOG_FILE, JSON.stringify({ vfor: id, verification }) + "\n"); } catch (e) { /* ignore */ } }
   return Boolean(rec);
 }
 
-function all() { return records; }
+// Records for a tenant (or ALL when no tenant is given — internal boot/tests only).
+function all(tenantId) { return tenantId ? records.filter((r) => r.tenant === tenantId) : records; }
+// Distinct tenant ids present in the log (for per-tenant boot seeding).
+function tenants() { return [...new Set(records.map((r) => r.tenant).filter(Boolean))]; }
 
-// Truly empty the store — in memory AND durably. Destructive; used by the
-// dashboard's "clear session data" action. Returns how many records were removed.
-function clear() {
+// Truly empty the store. With a tenantId, clears ONLY that tenant's data (the dashboard
+// "clear" action); with no arg, clears everything (boot/test reset). Returns count removed.
+function clear(tenantId) {
+  if (tenantId) {
+    const before = records.length;
+    records = records.filter((r) => r.tenant !== tenantId);
+    const removed = before - records.length;
+    if (backend === "postgres") { try { pg.persistClearTenant(tenantId); } catch (e) { console.error("store clear error:", e.message); } }
+    else { try { fs.writeFileSync(LOG_FILE, records.map((r) => JSON.stringify(r)).join("\n") + (records.length ? "\n" : "")); } catch (e) { /* ignore */ } }
+    return removed;
+  }
   const removed = records.length;
   records = [];
   if (backend === "postgres") { try { pg.persistClear(); } catch (e) { console.error("store clear error:", e.message); } }
@@ -126,10 +137,12 @@ function rangeCutoff(range, now = Date.now()) { return RANGE_MS[range] ? now - R
 // case-insensitive substring match on the model field — all against real fields.
 function predicateFor(filter = {}, now = Date.now()) {
   const cutoff = rangeCutoff(filter.range, now);
+  const tenant = filter.tenant || null;   // TENANT SCOPING: every metric query filters by tenant
   const tier = filter.tier || null;
   const mode = filter.mode || null;
   const needle = (filter.q || "").trim().toLowerCase();
   return (r) => {
+    if (tenant && r.tenant !== tenant) return false; // no cross-tenant rows, ever
     if (cutoff !== null && new Date(r.ts).getTime() < cutoff) return false;
     if (tier && r.tier !== tier) return false;
     if (mode && r.mode !== mode) return false;
@@ -312,14 +325,14 @@ function summary(filter = {}, now = Date.now()) {
   };
 }
 
-function recent(n = 25) { return records.slice(-n).reverse(); }
+function recent(n = 25, tenantId) { return (tenantId ? records.filter((r) => r.tenant === tenantId) : records).slice(-n).reverse(); }
 
 // Daily rollups computed from the real log (survive restarts because records
 // persist). One entry per UTC day, reusing accumulate() so the numbers reconcile
 // exactly with /api/summary for the same period.
-function dailyRollups() {
+function dailyRollups(tenantId) {
   const byDay = new Map();
-  for (const r of records) {
+  for (const r of (tenantId ? records.filter((x) => x.tenant === tenantId) : records)) {
     const day = String(r.ts).slice(0, 10); // yyyy-mm-dd
     if (!byDay.has(day)) byDay.set(day, []);
     byDay.get(day).push(r);
@@ -344,7 +357,7 @@ function toCsv(pred) {
 }
 
 module.exports = {
-  init, ready, flush, close, recover, health, add, addVerification, all, clear, recent, toCsv,
+  init, ready, flush, close, recover, health, add, addVerification, all, tenants, clear, recent, toCsv,
   aggregate, perModel, series, sessions, summary, dailyRollups,
   predicateFor, rangeCutoff,
   backend: () => backend

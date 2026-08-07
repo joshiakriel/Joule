@@ -119,7 +119,7 @@ test("DB killed mid-run: writes buffer, proxy keeps serving, reconciles when the
     async query(sql, params) {
       if (/CREATE TABLE|SELECT 1/.test(sql)) { if (down) throw new Error("ECONNREFUSED"); return { rows: [{ ok: 1 }] }; }
       if (down) throw new Error("ECONNREFUSED");
-      if (/^\s*INSERT/.test(sql)) { tableIds.push(params[0]); return { rows: [] }; }
+      if (/^\s*INSERT/.test(sql)) { tableIds.push(params[1]); return { rows: [] }; } // params: [tenant_id, id, ...]
       if (/TRUNCATE/.test(sql)) { tableIds.length = 0; return { rows: [] }; }
       if (/SELECT data/.test(sql)) return { rows: [] };
       return { rows: [] };

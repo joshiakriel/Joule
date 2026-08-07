@@ -68,6 +68,26 @@ const config = {
   subscriptionCostMonthly: num(process.env.SUBSCRIPTION_COST_MONTHLY, 0),
 
   /**
+   * Multi-tenant auth (Phase 1.1). Two entry points:
+   *   - /v1/*  (the OpenAI-compatible proxy): a customer's JOULE API KEY (Bearer jk_...)
+   *     resolves to their tenant; that tenant's encrypted upstream key makes the real call.
+   *   - /api/* (dashboard): a Supabase Auth JWT (HS256, verified locally against
+   *     SUPABASE_JWT_SECRET — password/session logic stays managed by Supabase).
+   * EVERY stored row, cache key, budget and metric query is scoped to the resolved tenant.
+   * `required` defaults ON in production and OFF in DRY_RUN so offline tests run within the
+   * default tenant; the isolation tests flip it on and mint per-tenant keys.
+   */
+  auth: {
+    required: bool(process.env.AUTH_REQUIRED, !bool(process.env.DRY_RUN, false)),
+    jwtSecret: process.env.SUPABASE_JWT_SECRET || "",     // Supabase project JWT secret (HS256)
+    // AES-256-GCM key for encrypting per-tenant upstream keys at rest. In DRY_RUN a
+    // deterministic dev key is derived so offline tests work; set a real 64-hex key in prod.
+    encKey: process.env.JOULE_ENC_KEY || "",
+    keyPrefix: process.env.JOULE_KEY_PREFIX || "jk_live_", // customer key prefix
+    defaultTenantId: process.env.DEFAULT_TENANT_ID || "00000000-0000-0000-0000-000000000001"
+  },
+
+  /**
    * Persistence backend. The store keeps an in-memory record mirror either way;
    * this only chooses where records are DURABLY written so they survive a restart.
    *   - "memory"   : append-only JSONL on local disk (single node, ephemeral hosts).

@@ -180,15 +180,20 @@ test("semantic cache (opt-in) serves a near-duplicate and reports safety metrics
   } finally { semcache.reset(); }
 });
 
-test("semantic cache ISOLATION: tenant B never gets tenant A's cached answer (over HTTP)", async () => {
+test("semantic cache ISOLATION: tenant B never gets tenant A's cached answer (authenticated tenants)", async () => {
+  const tenancy = require("../src/tenancy");
   store.clear(); semcache.reset(); semcache.configure({ enabled: true, baseThreshold: 0.8, minSimilarity: 0.5, verifyRate: 1 });
+  const savedReq = config.auth.required; config.auth.required = true; tenancy.reset();
+  const A = tenancy.createTenant("A"), B = tenancy.createTenant("B");
+  const keyA = tenancy.mintKey(A.id).key, keyB = tenancy.mintKey(B.id).key;
+  const auth = (k) => ({ authorization: "Bearer " + k });
   try {
-    await post({ model: "auto", messages: [{ role: "user", content: "outline the regional logistics plan briefly" }] }, { "x-joule-tenant": "tenant-A" }); // store under A
-    const b = await post({ model: "auto", messages: [{ role: "user", content: "outline the regional logistics plan briefly now" }] }, { "x-joule-tenant": "tenant-B" });
+    await post({ model: "auto", messages: [{ role: "user", content: "outline the regional logistics plan briefly" }] }, auth(keyA)); // store under A
+    const b = await post({ model: "auto", messages: [{ role: "user", content: "outline the regional logistics plan briefly now" }] }, auth(keyB));
     assert.notEqual(b.headers.get("x-joule-mode"), "semantic_cache", "tenant B must NOT get A's cached answer");
-    const a2 = await post({ model: "auto", messages: [{ role: "user", content: "outline the regional logistics plan briefly please" }] }, { "x-joule-tenant": "tenant-A" });
+    const a2 = await post({ model: "auto", messages: [{ role: "user", content: "outline the regional logistics plan briefly please" }] }, auth(keyA));
     assert.equal(a2.headers.get("x-joule-mode"), "semantic_cache", "same-tenant near-duplicate hits");
-  } finally { semcache.reset(); }
+  } finally { semcache.reset(); config.auth.required = savedReq; tenancy.reset(); }
 });
 
 test("sensitive-query bypass: X-Joule-Cache-Bypass skips the semantic layer, still metered", async () => {
