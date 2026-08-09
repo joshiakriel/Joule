@@ -244,10 +244,45 @@ database (it truncates `records`) and opt in explicitly:
 STORE_PG_TEST=1 DATABASE_URL=postgresql://…  npm test
 ```
 
+## Self-serve onboarding — signup to first metered request
+
+A new user activates without talking to us. The dashboard walks them through three steps and
+detects their first request automatically.
+
+1. **Sign up / sign in** (Supabase Auth, email + password). They land in their own empty
+   workspace with a **"Get started — N steps left"** panel, not a wall of zeros.
+2. **Step 1 — Add your provider key.** Paste an OpenAI/Anthropic/Groq key. Joule validates it
+   with a **real but free** `GET /models` call, so a typo fails here instead of in production,
+   then stores it **AES-256-GCM encrypted per tenant**. It is never logged and never returned
+   to the browser — `POST /api/provider-key`.
+3. **Step 2 — Get your Joule key + endpoint.** `POST /api/keys` mints `jk_live_…`, shown
+   **once** (stored only as a sha-256 hash) with a copy button, alongside the exact one-line
+   change prefilled with their real endpoint and key, in **Node/TS, Python and curl**.
+4. **Step 3 — Send your first request.** Either run the snippet in their own app or hit
+   **"Send a test request for me"**. A live *"waiting for your first request…"* state polls
+   `GET /api/onboarding` and **advances the moment a request arrives** — whichever way it came.
+5. **Activation moment.** The wizard shows their **real** first call: *"Routed to `<model>`
+   (`<tier>` tier) · cost $X · saved $Y"* plus energy, CO₂ and quality. **Nothing is seeded** —
+   if quality hasn't been verified yet it says *"pending verification"*, never a fake score.
+
+**UI honesty:** every panel has a real empty state ("No requests yet", "not yet verified",
+ROI `empty: true`). The dashboard never renders a fabricated 0%, a fake 100% quality, or a
+chart built from invented data.
+
+**Setup for the operator:** `SUPABASE_URL` + `SUPABASE_ANON_KEY` (served to the browser by the
+public `GET /api/auth-config` — the anon key is public by design; the **service-role key must
+never** be set here), `SUPABASE_JWT_SECRET`, `JOULE_ENC_KEY`. With `AUTH_REQUIRED=false`
+(DRY_RUN/dev) the login screen is skipped and everything runs in the default tenant.
+
+**Security note:** the session token is held **in memory only** — never `localStorage`,
+`sessionStorage` or cookies — so it can't be read by injected script or outlive the tab. The
+trade-off is deliberate: a page refresh means signing in again. Enforced by a test.
+
 ## Multi-tenancy, auth & data isolation
 
 Joule is multi-tenant: **every stored row, cache key, budget, calibration set and metric query
 is scoped to a tenant — there are no global reads.** Isolation is enforced at two layers.
+Each tenant's live model calls use **their own** encrypted provider key (never a shared one).
 
 **How a customer's app authenticates (the `/v1` proxy).** A tenant mints a **Joule API key**
 (`jk_live_…`) and puts it in the OpenAI client exactly where the model key used to go:

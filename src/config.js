@@ -84,7 +84,12 @@ const config = {
     // deterministic dev key is derived so offline tests work; set a real 64-hex key in prod.
     encKey: process.env.JOULE_ENC_KEY || "",
     keyPrefix: process.env.JOULE_KEY_PREFIX || "jk_live_", // customer key prefix
-    defaultTenantId: process.env.DEFAULT_TENANT_ID || "00000000-0000-0000-0000-000000000001"
+    defaultTenantId: process.env.DEFAULT_TENANT_ID || "00000000-0000-0000-0000-000000000001",
+    // PUBLIC (browser) Supabase values — served to the dashboard by GET /api/auth-config so
+    // they come from env, not hardcoded HTML. The anon key is DESIGNED to be public (it grants
+    // nothing without a valid session). The SERVICE-ROLE key must never appear client-side.
+    supabaseUrl: process.env.SUPABASE_URL || "",
+    supabaseAnonKey: process.env.SUPABASE_ANON_KEY || ""
   },
 
   /**

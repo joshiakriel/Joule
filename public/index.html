@@ -174,9 +174,133 @@ function brandFallback(img){var n=(parseInt(img.dataset.try||"0",10))+1;img.data
   .roi-head{font-size:14px;color:var(--text);line-height:1.5}
   .tips{margin:10px 0 0;padding-left:18px;font-size:12px;color:var(--muted);line-height:1.6}
   .tips li{margin-bottom:4px}
+
+  /* ---- Phase 1.2: auth + onboarding wizard (mobile-responsive) ---- */
+  .gate{position:fixed;inset:0;background:var(--bg,#0b0f14);z-index:50;display:flex;align-items:center;justify-content:center;padding:20px;overflow-y:auto}
+  .gate-card{width:100%;max-width:420px;background:var(--panel,#121821);border:1px solid var(--line,#1e2733);border-radius:14px;padding:26px}
+  .gate-card h2{margin:0 0 4px;font-size:20px}
+  .gate-sub{color:var(--muted);font-size:13px;margin-bottom:18px;line-height:1.5}
+  .fld{margin-bottom:12px}
+  .fld label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}
+  .fld input{width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid var(--line,#1e2733);background:#0d131b;color:inherit;font-size:14px}
+  .fld input:focus{outline:none;border-color:var(--brand,#33E3C7)}
+  .btn-primary{width:100%;padding:11px;border-radius:8px;border:0;background:var(--brand,#33E3C7);color:#062024;font-weight:600;font-size:14px;cursor:pointer}
+  .btn-primary:disabled{opacity:.55;cursor:not-allowed}
+  .btn-link{background:none;border:0;color:var(--brand,#33E3C7);cursor:pointer;font-size:13px;padding:0;text-decoration:underline}
+  .gate-msg{margin-top:12px;font-size:13px;line-height:1.5;padding:9px 11px;border-radius:8px;display:none}
+  .gate-msg.err{display:block;background:rgba(255,90,90,.1);border:1px solid rgba(255,90,90,.35);color:#ff9a9a}
+  .gate-msg.ok{display:block;background:rgba(51,227,199,.1);border:1px solid rgba(51,227,199,.35);color:var(--brand,#33E3C7)}
+  .gate-foot{margin-top:16px;text-align:center;font-size:13px;color:var(--muted)}
+
+  /* wizard */
+  .wiz{max-width:760px;width:100%}
+  .wiz-steps{display:flex;gap:8px;margin-bottom:20px}
+  .wiz-pip{flex:1;height:3px;border-radius:2px;background:var(--line,#1e2733)}
+  .wiz-pip.done{background:var(--brand,#33E3C7)}
+  .wiz-pip.active{background:#2D87AE}
+  .wstep{display:none}
+  .wstep.on{display:block}
+  .wstep h3{margin:0 0 6px;font-size:17px}
+  .wstep .why{color:var(--muted);font-size:13px;line-height:1.6;margin-bottom:16px}
+  .code-box{position:relative;background:#0d131b;border:1px solid var(--line,#1e2733);border-radius:10px;padding:13px 13px 13px;margin:10px 0;overflow-x:auto}
+  .code-box pre{margin:0;font-size:12.5px;line-height:1.65;white-space:pre;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .copy-btn{position:absolute;top:8px;right:8px;padding:4px 10px;font-size:11px;border-radius:6px;border:1px solid var(--line,#1e2733);background:#121821;color:var(--muted);cursor:pointer}
+  .copy-btn:hover{color:var(--brand,#33E3C7);border-color:var(--brand,#33E3C7)}
+  .tabs{display:flex;gap:6px;margin-bottom:8px}
+  .tab{padding:5px 12px;font-size:12px;border-radius:6px;border:1px solid var(--line,#1e2733);background:none;color:var(--muted);cursor:pointer}
+  .tab.on{color:var(--brand,#33E3C7);border-color:var(--brand,#33E3C7)}
+  .keyout{word-break:break-all;font-family:ui-monospace,monospace;font-size:12.5px;color:var(--brand,#33E3C7)}
+  .warn-once{font-size:12px;color:#ffcc66;background:rgba(255,204,102,.08);border:1px solid rgba(255,204,102,.3);border-radius:8px;padding:9px 11px;margin:10px 0;line-height:1.5}
+  .waiting{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:13px;padding:14px;background:#0d131b;border:1px solid var(--line,#1e2733);border-radius:10px;margin:12px 0}
+  .pulse{width:9px;height:9px;border-radius:50%;background:var(--brand,#33E3C7);animation:pl 1.4s ease-in-out infinite;flex:0 0 auto}
+  @keyframes pl{0%,100%{opacity:.25}50%{opacity:1}}
+  .wiz-nav{display:flex;gap:10px;margin-top:18px;flex-wrap:wrap}
+  .wiz-nav button{flex:1;min-width:130px;padding:10px;border-radius:8px;font-size:13px;cursor:pointer;border:1px solid var(--line,#1e2733);background:#121821;color:inherit}
+  .wiz-nav .go{background:var(--brand,#33E3C7);color:#062024;border:0;font-weight:600}
+  .wiz-nav .go:disabled{opacity:.55;cursor:not-allowed}
+  .celebrate{text-align:center;padding:6px 0 2px}
+  .celebrate .big{font-size:30px;margin-bottom:8px}
+  .cel-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin:16px 0}
+  .cel-cell{background:#0d131b;border:1px solid var(--line,#1e2733);border-radius:10px;padding:12px}
+  .cel-cell .cl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
+  .cel-cell .cv{font-size:16px;margin-top:3px;font-weight:600}
+  .getstarted{background:var(--panel,#121821);border:1px solid var(--brand,#33E3C7);border-radius:12px;padding:16px 18px;margin-bottom:16px}
+  .getstarted h3{margin:0 0 5px;font-size:15px}
+  .getstarted p{margin:0 0 11px;color:var(--muted);font-size:13px;line-height:1.55}
+  .gs-btn{padding:9px 16px;border-radius:8px;border:0;background:var(--brand,#33E3C7);color:#062024;font-weight:600;font-size:13px;cursor:pointer}
+  @media (max-width:560px){ .gate-card,.wiz{max-width:100%} .gate{padding:12px} .wiz-nav button{min-width:100%} }
 </style>
 </head>
 <body>
+
+<!-- ============ AUTH GATE (shown only when the deployment requires auth) ============ -->
+<div class="gate" id="authGate" style="display:none">
+  <div class="gate-card">
+    <h2>Sign in to Joule</h2>
+    <div class="gate-sub" id="authSub">Your workspace holds your own provider key, your usage log and your savings — visible only to you.</div>
+    <form id="authForm">
+      <div class="fld"><label for="authEmail">Email</label><input id="authEmail" type="email" autocomplete="email" required></div>
+      <div class="fld"><label for="authPass">Password</label><input id="authPass" type="password" autocomplete="current-password" minlength="6" required></div>
+      <button class="btn-primary" id="authBtn" type="submit">Sign in</button>
+    </form>
+    <div class="gate-msg" id="authMsg"></div>
+    <div class="gate-foot"><span id="authToggleTxt">New here?</span> <button class="btn-link" id="authToggle" type="button">Create an account</button></div>
+  </div>
+</div>
+
+<!-- ============ 3-STEP SETUP WIZARD ============ -->
+<div class="gate" id="wizGate" style="display:none">
+  <div class="gate-card wiz">
+    <h2 style="margin-bottom:14px">Set up Joule</h2>
+    <div class="wiz-steps"><div class="wiz-pip" id="pip1"></div><div class="wiz-pip" id="pip2"></div><div class="wiz-pip" id="pip3"></div></div>
+
+    <!-- STEP 1 -->
+    <div class="wstep" id="wstep1">
+      <h3>1 · Add your provider key</h3>
+      <div class="why">Paste your OpenAI, Anthropic or Groq key. Joule holds it <b>server-side, encrypted</b>, and uses it to make your model calls — it is never written to logs and never sent back to your browser. We verify it now with a free <span class="mono">/models</span> check so you don't discover a typo in production.</div>
+      <div class="fld"><label for="provKey">Provider API key</label><input id="provKey" type="password" placeholder="sk-…" autocomplete="off"></div>
+      <div class="fld"><label for="provBase">Provider base URL</label><input id="provBase" type="text" placeholder="https://api.openai.com/v1"></div>
+      <div class="gate-msg" id="provMsg"></div>
+      <div class="wiz-nav"><button class="go" id="provSave" type="button">Verify &amp; save key</button><button id="provSkip" type="button">Skip (dry-run mode)</button></div>
+    </div>
+
+    <!-- STEP 2 -->
+    <div class="wstep" id="wstep2">
+      <h3>2 · Get your Joule key + endpoint</h3>
+      <div class="why">This is the key your app uses instead of your provider key. Point any OpenAI SDK at Joule by changing <b>two lines</b> — everything else in your code stays the same.</div>
+      <button class="gs-btn" id="mintBtn" type="button">Create my Joule key</button>
+      <div id="mintOut" style="display:none">
+        <div class="warn-once">⚠️ Copy this now — for your security it is stored only as a hash and will never be shown again. You can create another any time.</div>
+        <div class="code-box"><button class="copy-btn" data-copy="jouleKey">Copy</button><pre class="keyout" id="jouleKey"></pre></div>
+        <div class="tabs"><button class="tab on" data-lang="node">Node / TS</button><button class="tab" data-lang="python">Python</button><button class="tab" data-lang="curl">curl</button></div>
+        <div class="code-box"><button class="copy-btn" data-copy="snippet">Copy</button><pre id="snippet"></pre></div>
+        <div class="wiz-nav"><button class="go" id="toStep3" type="button">Next: send a request</button></div>
+      </div>
+    </div>
+
+    <!-- STEP 3 -->
+    <div class="wstep" id="wstep3">
+      <h3>3 · Send your first request</h3>
+      <div class="why">Run the snippet in your own app, or send a test request from here. Joule <b>routes</b> it to the cheapest model that can handle it, <b>meters</b> cost · energy · carbon, and <b>verifies</b> a sample of answers for quality.</div>
+      <div class="waiting" id="waitBox"><span class="pulse"></span><span>Waiting for your first request… this page updates the moment one arrives.</span></div>
+      <div class="gate-msg" id="testMsg"></div>
+      <div class="wiz-nav"><button class="go" id="sendTest" type="button">Send a test request for me</button></div>
+    </div>
+
+    <!-- ACTIVATION -->
+    <div class="wstep" id="wstepDone">
+      <div class="celebrate">
+        <div class="big">⚡</div>
+        <h3>Your first request is metered</h3>
+        <div class="why" id="celLine" style="margin-bottom:0"></div>
+      </div>
+      <div class="cel-grid" id="celGrid"></div>
+      <div class="why" style="font-size:12px">Everything above is your real call — we never seed sample data. Quality shows as pending until enough answers have been verified to say anything honest about it.</div>
+      <div class="wiz-nav"><button class="go" id="toDash" type="button">Open my dashboard</button></div>
+    </div>
+  </div>
+</div>
+
 <div class="wrap">
   <header>
     <div class="brand">
@@ -191,6 +315,7 @@ function brandFallback(img){var n=(parseInt(img.dataset.try||"0",10))+1;img.data
   <div class="tagline">Real proxy, real tokens, real grid. Point any OpenAI client at <span class="mono cyan">/v1</span>, or send a test prompt below — Joule routes it, meters cost · energy · carbon, and logs an auditable record.</div>
 
   <div class="banner ok" id="banner" style="display:none"></div>
+  <div id="getStartedHost"></div>
 
   <div class="arch">
     <div class="arch-flow">
@@ -346,6 +471,205 @@ function brandFallback(img){var n=(parseInt(img.dataset.try||"0",10))+1;img.data
 </div>
 
 <script>
+/* =====================================================================
+   Phase 1.2 — auth + self-serve onboarding.
+   SECURITY: the access token lives in a module-scoped variable ONLY. It is never
+   written to localStorage/sessionStorage/cookies, so it can't be read by injected
+   script or survive the tab. Trade-off: a refresh means signing in again.
+   ===================================================================== */
+let ACCESS_TOKEN = null;      // in-memory only, by design
+let AUTH_CFG = { authRequired: false, configured: false };
+let ME = null;
+
+// Transparently attach the session token to same-origin API calls, so every existing
+// fetch() in this dashboard becomes authenticated without touching its call site.
+const _fetch = window.fetch.bind(window);
+window.fetch = (input, init = {}) => {
+  const url = typeof input === "string" ? input : (input && input.url) || "";
+  const sameOrigin = url.startsWith("/") || url.startsWith(location.origin);
+  if (sameOrigin && ACCESS_TOKEN && !(init.headers && (init.headers.authorization || init.headers.Authorization))) {
+    init = { ...init, headers: { ...(init.headers || {}), authorization: "Bearer " + ACCESS_TOKEN } };
+  }
+  return _fetch(input, init);
+};
+
+const gel = (id) => document.getElementById(id);
+const showMsg = (el, text, kind) => { const n = gel(el); n.className = "gate-msg " + (kind || "err"); n.textContent = text; };
+const hideMsg = (el) => { gel(el).className = "gate-msg"; gel(el).textContent = ""; };
+
+// ---- Supabase Auth over REST (no SDK dependency) ----
+async function supabaseAuth(path, body) {
+  const r = await _fetch(`${AUTH_CFG.supabaseUrl}/auth/v1/${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", apikey: AUTH_CFG.supabaseAnonKey },
+    body: JSON.stringify(body)
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error_description || data.msg || data.message || "Authentication failed.");
+  return data;
+}
+
+let signupMode = false;
+gel("authToggle").onclick = () => {
+  signupMode = !signupMode;
+  gel("authBtn").textContent = signupMode ? "Create account" : "Sign in";
+  gel("authToggleTxt").textContent = signupMode ? "Already have an account?" : "New here?";
+  gel("authToggle").textContent = signupMode ? "Sign in" : "Create an account";
+  gel("authPass").autocomplete = signupMode ? "new-password" : "current-password";
+  hideMsg("authMsg");
+};
+
+gel("authForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const email = gel("authEmail").value.trim(), password = gel("authPass").value;
+  const btn = gel("authBtn"); btn.disabled = true; hideMsg("authMsg");
+  try {
+    const data = signupMode
+      ? await supabaseAuth("signup", { email, password })
+      : await supabaseAuth("token?grant_type=password", { email, password });
+    if (!data.access_token) {
+      // Supabase is configured to confirm emails first — tell the user plainly.
+      showMsg("authMsg", "Account created. Check your inbox to confirm your email, then sign in.", "ok");
+      signupMode = false; gel("authToggle").click(); gel("authToggle").click();
+      return;
+    }
+    ACCESS_TOKEN = data.access_token;
+    gel("authGate").style.display = "none";
+    await startApp();
+  } catch (err) {
+    showMsg("authMsg", err.message);
+  } finally { btn.disabled = false; }
+};
+
+// ---- onboarding wizard ----
+let WIZ_KEY = null, WIZ_ENDPOINT = "", pollTimer = null;
+
+function snippetFor(lang, endpoint, key) {
+  const k = key || "YOUR_JOULE_KEY";
+  if (lang === "python") return 'from openai import OpenAI\n\nclient = OpenAI(\n    base_url="' + endpoint + '",\n    api_key="' + k + '",\n)\n\nresp = client.chat.completions.create(\n    model="auto",\n    messages=[{"role": "user", "content": "Hello from Joule"}],\n)\nprint(resp.choices[0].message.content)';
+  if (lang === "curl") return 'curl ' + endpoint + '/chat/completions \\\n  -H "Authorization: Bearer ' + k + '" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"model":"auto","messages":[{"role":"user","content":"Hello from Joule"}]}\'';
+  return 'import OpenAI from "openai";\n\nconst client = new OpenAI({\n  baseURL: "' + endpoint + '",   // ← the only change\n  apiKey: "' + k + '",\n});\n\nconst r = await client.chat.completions.create({\n  model: "auto",\n  messages: [{ role: "user", content: "Hello from Joule" }],\n});\nconsole.log(r.choices[0].message.content);';
+}
+
+function showStep(n) {
+  ["wstep1", "wstep2", "wstep3", "wstepDone"].forEach((s) => gel(s).classList.remove("on"));
+  gel(n === 4 ? "wstepDone" : "wstep" + n).classList.add("on");
+  [1, 2, 3].forEach((i) => {
+    const p = gel("pip" + i); p.className = "wiz-pip" + (n > i || n === 4 ? " done" : i === n ? " active" : "");
+  });
+  if (n === 3) startPolling(); else stopPolling();
+}
+
+function openWizard(step) { gel("wizGate").style.display = "flex"; showStep(step); }
+function closeWizard() { stopPolling(); gel("wizGate").style.display = "none"; }
+
+// STEP 1 — verify + store the provider key
+gel("provSave").onclick = async () => {
+  const apiKey = gel("provKey").value.trim();
+  if (!apiKey) return showMsg("provMsg", "Paste your provider API key first.");
+  const btn = gel("provSave"); btn.disabled = true; btn.textContent = "Verifying with your provider…"; hideMsg("provMsg");
+  try {
+    const r = await fetch("/api/provider-key", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ apiKey, baseUrl: gel("provBase").value.trim() || undefined }) });
+    const d = await r.json();
+    if (!r.ok || !d.valid) return showMsg("provMsg", d.message || "That key was rejected.");
+    showMsg("provMsg", "✓ " + d.message + " Stored encrypted — it never leaves the server.", "ok");
+    gel("provKey").value = "";
+    setTimeout(() => { hideMsg("provMsg"); showStep(2); }, 900);
+  } catch { showMsg("provMsg", "Could not reach Joule. Check your connection and try again."); }
+  finally { btn.disabled = false; btn.textContent = "Verify & save key"; }
+};
+gel("provSkip").onclick = () => showStep(2);
+
+// STEP 2 — mint the Joule key (shown once)
+gel("mintBtn").onclick = async () => {
+  const btn = gel("mintBtn"); btn.disabled = true;
+  try {
+    const r = await fetch("/api/keys", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "dashboard" }) });
+    const d = await r.json();
+    WIZ_KEY = d.key; WIZ_ENDPOINT = d.endpoint;
+    gel("jouleKey").textContent = d.key;
+    gel("snippet").textContent = snippetFor("node", d.endpoint, d.key);
+    gel("mintOut").style.display = "block";
+    btn.style.display = "none";
+  } catch { alert("Could not create a key. Please try again."); btn.disabled = false; }
+};
+document.querySelectorAll(".tab").forEach((t) => {
+  t.onclick = () => {
+    document.querySelectorAll(".tab").forEach((x) => x.classList.remove("on"));
+    t.classList.add("on");
+    gel("snippet").textContent = snippetFor(t.dataset.lang, WIZ_ENDPOINT, WIZ_KEY);
+  };
+});
+document.querySelectorAll(".copy-btn").forEach((b) => {
+  b.onclick = async () => {
+    try { await navigator.clipboard.writeText(gel(b.dataset.copy).textContent); const o = b.textContent; b.textContent = "Copied ✓"; setTimeout(() => (b.textContent = o), 1400); }
+    catch { /* clipboard blocked — the text is selectable anyway */ }
+  };
+});
+gel("toStep3").onclick = () => showStep(3);
+
+// STEP 3 — auto-detect the first real request (their app OR our test button)
+function startPolling() {
+  stopPolling();
+  pollTimer = setInterval(async () => {
+    try {
+      const d = await (await fetch("/api/onboarding")).json();
+      if (d.steps.firstRequest && d.firstRequest) { stopPolling(); celebrate(d.firstRequest); }
+    } catch { /* transient — keep waiting */ }
+  }, 2000);
+}
+function stopPolling() { if (pollTimer) clearInterval(pollTimer); pollTimer = null; }
+
+gel("sendTest").onclick = async () => {
+  const btn = gel("sendTest"); btn.disabled = true; btn.textContent = "Sending…"; hideMsg("testMsg");
+  try {
+    const headers = { "content-type": "application/json" };
+    if (WIZ_KEY) headers.authorization = "Bearer " + WIZ_KEY;   // exercise their real key path
+    const r = await _fetch("/v1/chat/completions", { method: "POST", headers,
+      body: JSON.stringify({ model: "auto", messages: [{ role: "user", content: "Hello from Joule — this is my first request." }] }) });
+    if (!r.ok) { const e = await r.json().catch(() => ({})); showMsg("testMsg", (e.error && e.error.message) || "The test request failed."); }
+  } catch { showMsg("testMsg", "Could not reach Joule."); }
+  finally { btn.disabled = false; btn.textContent = "Send a test request for me"; }
+};
+
+// ACTIVATION MOMENT — real numbers from their real first call, nothing seeded
+function celebrate(fr) {
+  const usd = (x) => x >= 1 ? "$" + x.toFixed(2) : "$" + x.toFixed(4);
+  gel("celLine").innerHTML = "Routed to <b>" + esc(fr.model) + "</b> (" + esc(fr.tier) + " tier) · cost <b>" + usd(fr.costUsd) + "</b> · " +
+    (fr.savedUsd > 0 ? "saved <b>" + usd(fr.savedUsd) + "</b> versus always using the large model" : "metered against the large-model baseline");
+  gel("celGrid").innerHTML =
+    '<div class="cel-cell"><div class="cl">Cost</div><div class="cv">' + usd(fr.costUsd) + '</div></div>' +
+    '<div class="cel-cell"><div class="cl">Energy</div><div class="cv">' + fr.energyWh.toFixed(3) + ' Wh</div></div>' +
+    '<div class="cel-cell"><div class="cl">CO₂</div><div class="cv">' + fr.carbonG.toFixed(2) + ' g</div></div>' +
+    '<div class="cel-cell"><div class="cl">Quality</div><div class="cv" style="font-size:13px;color:var(--muted)">' +
+      (fr.qualityScore == null ? "pending verification" : (fr.qualityScore * 100).toFixed(0) + "%") + '</div></div>';
+  showStep(4);
+}
+gel("toDash").onclick = () => { closeWizard(); refresh(); };
+
+// ---- boot: decide between login screen, wizard, or straight to the dashboard ----
+async function startApp() {
+  try { ME = await (await fetch("/api/me")).json(); } catch { ME = null; }
+  if (ME && ME.onboarding && !ME.onboarding.complete) {
+    const s = ME.onboarding.steps;
+    openWizard(!s.providerKey ? 1 : !s.jouleKey ? 2 : 3);
+  }
+  refresh();
+}
+
+async function bootAuth() {
+  try { AUTH_CFG = await (await _fetch("/api/auth-config")).json(); } catch { AUTH_CFG = { authRequired: false }; }
+  if (!AUTH_CFG.authRequired) return startApp();      // open dev/DRY_RUN deployment
+  if (!AUTH_CFG.configured) {                          // auth on but Supabase not wired up yet
+    gel("authGate").style.display = "flex";
+    gel("authForm").style.display = "none";
+    gel("authSub").textContent = "This deployment requires sign-in, but Supabase is not configured yet. Set SUPABASE_URL and SUPABASE_ANON_KEY on the server.";
+    return;
+  }
+  gel("authGate").style.display = "flex";
+}
+
 const examples = [
   "hi, thanks so much!",
   "what's the capital of the UAE?",
@@ -426,6 +750,8 @@ const qPct = (s) => s == null ? "—" : Math.round(s * 100) + "%";
 
 async function refresh() {
   let meta, view, advisory;
+  // keep the "Get started" panel in step with onboarding progress (cheap, tolerant)
+  try { if (!ME || !ME.onboarding || !ME.onboarding.complete) { ME = await (await fetch("/api/me")).json(); await paintGetStarted(); } } catch { /* pre-auth or offline */ }
   try {
     [meta, view, advisory] = await Promise.all([
       fetch("/api/stats").then(r => r.json()),
@@ -820,9 +1146,23 @@ async function saveConfig() {
 }
 $("cfg-save").onclick = saveConfig;
 
-loadConfig();
-refresh();
-setInterval(refresh, 4000);
+// Boot through the auth gate: it decides login screen vs. wizard vs. dashboard, then
+// calls startApp() -> refresh(). Polling only runs once we're actually past the gate.
+bootAuth();
+setInterval(() => { if (!AUTH_CFG.authRequired || ACCESS_TOKEN) refresh(); }, 4000);
+
+// "Get started" panel — shown instead of a wall of zeros until onboarding is done.
+async function paintGetStarted() {
+  const host = $("getStartedHost");
+  if (!host) return;
+  if (!ME || !ME.onboarding || ME.onboarding.complete) { host.innerHTML = ""; return; }
+  const s = ME.onboarding.steps;
+  const left = [!s.providerKey && "add your provider key", !s.jouleKey && "create your Joule key", !s.firstRequest && "send your first request"].filter(Boolean);
+  host.innerHTML = '<div class="getstarted"><h3>Get started — ' + left.length + ' step' + (left.length === 1 ? "" : "s") + ' left</h3>' +
+    '<p>You haven\'t sent a request yet, so there\'s nothing to measure. Next: ' + esc(left.join(", ")) + '.</p>' +
+    '<button class="gs-btn" id="gsOpen" type="button">Continue setup</button></div>';
+  $("gsOpen").onclick = () => openWizard(!s.providerKey ? 1 : !s.jouleKey ? 2 : 3);
+}
 </script>
 </body>
 </html>

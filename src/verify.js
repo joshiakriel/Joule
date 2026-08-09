@@ -5,6 +5,7 @@ const store = require("./store");
 const signals = require("./signals");
 const calibrate = require("./calibrate");
 const conformal = require("./conformal");
+const tenancy = require("./tenancy");
 
 /**
  * Quality verification — Joule's differentiator, EVOLVED from a naive LLM judge to
@@ -181,10 +182,10 @@ function dryJudge(model, seed) {
   let h = 0; const s = model + "|" + seed; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
   return 0.82 + (h % 14) / 100; // 0.82..0.95, varies per model+prompt so a panel has spread
 }
-async function judgeUpstream(model, userText, first, second, whichIsCandidate) {
+async function judgeUpstream(model, userText, first, second, whichIsCandidate, apiKey) {
   const res = await fetch(config.upstreamBaseUrl + "/chat/completions", {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: "Bearer " + config.upstreamApiKey },
+    headers: { "content-type": "application/json", authorization: "Bearer " + (apiKey || config.upstreamApiKey) },
     body: JSON.stringify({
       model, temperature: 0, response_format: { type: "json_object" },
       messages: [
@@ -202,7 +203,7 @@ async function judgeUpstream(model, userText, first, second, whichIsCandidate) {
 }
 
 // Panel of judges with order randomisation + agreement. Returns a label decision.
-async function judgePanel(userText, answer, referenceAnswer) {
+async function judgePanel(userText, answer, referenceAnswer, apiKey) {
   const models = judgeModelList();
   const offline = config.dryRun || forcedScore != null;
   const judges = [];
@@ -218,7 +219,7 @@ async function judgePanel(userText, answer, referenceAnswer) {
       const first = candidateFirst ? answer : referenceAnswer;
       const second = candidateFirst ? referenceAnswer : answer;
       const which = candidateFirst ? "A" : "B";
-      const r = await judgeUpstream(model, userText, first, second, which);
+      const r = await judgeUpstream(model, userText, first, second, which, apiKey);
       score = r.score; usage = r.usage || { prompt_tokens: estTokens(userText + answer + referenceAnswer), completion_tokens: 24 };
     }
     usageTokens += (usage.prompt_tokens || 0) + (usage.completion_tokens || 0);
@@ -244,6 +245,10 @@ async function runVerification(ctx) {
   const gPerKwh = rec.grid.gPerKwh;
   if (testDelayMs) await sleep(testDelayMs);
 
+  // verification bills to the SAME tenant whose request is being verified — their own
+  // provider key, never another tenant's (falls back to the global env key in dev).
+  const providerKey = tenancy.getUpstreamKey(tenant) || config.upstreamApiKey;
+
   // reference (full-marks) answer + token usage
   let referenceAnswer, refUsage;
   if (config.dryRun || forcedScore != null) {
@@ -251,7 +256,7 @@ async function runVerification(ctx) {
     refUsage = { prompt_tokens: estTokens(userText), completion_tokens: estTokens(referenceAnswer) };
   } else {
     const res = await fetch(config.upstreamBaseUrl + "/chat/completions", {
-      method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + config.upstreamApiKey },
+      method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + providerKey },
       body: JSON.stringify({ model: referenceModel, messages: [{ role: "user", content: userText }] }), signal: AbortSignal.timeout(120000)
     });
     if (!res.ok) throw new Error("reference upstream " + res.status);
@@ -261,7 +266,7 @@ async function runVerification(ctx) {
   }
 
   const checks = hardChecks({ completion, answer, body });
-  const panel = await judgePanel(userText, answer, referenceAnswer);
+  const panel = await judgePanel(userText, answer, referenceAnswer, providerKey);
   // Label = hard checks pass AND the panel accepts. Low-agreement samples are
   // low-confidence: kept for the rolling score, EXCLUDED from calibration.
   const acceptable = checks.hardPass && panel.meanScore >= opts.judgeAcceptThreshold ? 1 : 0;

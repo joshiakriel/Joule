@@ -121,7 +121,9 @@ function proxyAuth(req, res, next) {
   return res.status(401).json({ error: { message: "missing or invalid Joule API key", type: "invalid_request_error", code: "unauthenticated" } });
 }
 function dashAuth(req, res, next) {
-  if (req.path === "/health") return next(); // liveness probe stays open
+  // Public by design: liveness, and the browser bootstrap values the login screen needs
+  // before anyone is signed in (Supabase URL + ANON key — never the service-role key).
+  if (req.path === "/health" || req.path === "/auth-config") return next();
   const t = tenancy.resolveFromJwt(req.get("authorization"));
   if (t) { req.tenant = t; return next(); }
   if (!config.auth.required) { req.tenant = tenancy.defaultTenant(); return next(); }
@@ -129,6 +131,13 @@ function dashAuth(req, res, next) {
 }
 app.use("/v1", proxyAuth);
 app.use("/api", dashAuth);
+
+// The provider key used for a tenant's real model calls: THEIR OWN encrypted key when
+// they've onboarded one, else the global env key (single-tenant/dev path). Returned for
+// immediate use as a bearer token — never logged, never returned over the API.
+function providerKeyFor(tenantId) {
+  return tenancy.getUpstreamKey(tenantId) || config.upstreamApiKey || "";
+}
 
 // ---- tiny normalized cache (exact-match after normalization) ----
 const cache = new Map(); // key -> { completion, ts }
@@ -267,10 +276,11 @@ async function handleStreaming({ res, started, tenant, body, userText, decision,
     return;
   }
 
-  // live — forward with stream:true and pipe chunks through unmodified
-  if (!config.upstreamApiKey) {
+  // live — forward with stream:true and pipe chunks through unmodified (tenant's own key)
+  const providerKey = providerKeyFor(tenant);
+  if (!providerKey) {
     budget.release(reservation); if (reservation) reservation.committed = true;
-    return res.status(400).json({ error: { message: "UPSTREAM_API_KEY not set. Set it, or run with DRY_RUN=true to test the pipeline." } });
+    return res.status(400).json({ error: { message: "No provider API key for this workspace. Add one in the dashboard (Setup → step 1), or run with DRY_RUN=true.", type: "invalid_request_error", code: "no_provider_key" } });
   }
   // resilient connect (timeout + retry/backoff + optional fallback). Retry applies to the
   // INITIAL connection only — once bytes flow we can't safely re-issue the request.
@@ -278,7 +288,7 @@ async function handleStreaming({ res, started, tenant, body, userText, decision,
     const b = { ...body, model: m, stream: true, stream_options: { include_usage: true } };
     return (reasoningPlan && m === model) ? reasoning.applyToBody(b, reasoningPlan) : b;
   };
-  const up = await upstream.openStream({ model, buildBody });
+  const up = await upstream.openStream({ model, buildBody, apiKey: providerKey });
   if (!up.ok) {
     budget.release(reservation); if (reservation) reservation.committed = true;
     return res.status(up.status).json({ error: up.error });
@@ -444,14 +454,16 @@ app.post("/v1/chat/completions", async (req, res) => {
       prefixCache = prefixCacheSavings({ model, tier, cachedInputTokens: Math.round(promptTokens * config.cache.dryRunPrefixRate), writeInputTokens: 0 });
       if (semLookup) semcache.addEntry({ ctx: semCtx, userText, vec: semLookup.vec, completion, promptTokens, completionTokens, hasPII: containsPII(userText) || containsPII(answer) });
     } else {
-      // real upstream call — timeout + retry/backoff + optional fallback via upstream.js
-      if (!config.upstreamApiKey) {
+      // real upstream call — uses THIS TENANT's provider key (falls back to the global env
+      // key for the single-tenant/dev path); timeout + retry/backoff + fallback via upstream.js
+      const providerKey = providerKeyFor(tenant);
+      if (!providerKey) {
         budget.release(reservation); reservation.committed = true; // no model call happened — free the reservation
-        return res.status(400).json({ error: { message: "UPSTREAM_API_KEY not set. Set it, or run with DRY_RUN=true to test the pipeline." } });
+        return res.status(400).json({ error: { message: "No provider API key for this workspace. Add one in the dashboard (Setup → step 1), or run with DRY_RUN=true.", type: "invalid_request_error", code: "no_provider_key" } });
       }
       // build the per-model request body (reasoning budget injected only on the routed model)
       const buildBody = (m) => (reasoningPlan && m === model) ? reasoning.applyToBody({ ...body, model: m }, reasoningPlan) : { ...body, model: m };
-      const up = await upstream.callJson({ model, buildBody });
+      const up = await upstream.callJson({ model, buildBody, apiKey: providerKey });
       if (!up.ok) {
         // clean OpenAI-shaped error; reservation freed, nothing metered (no corrupt record)
         budget.release(reservation); reservation.committed = true;
@@ -553,9 +565,10 @@ async function processBatchItem(item, session, grid, tenant) {
     promptTokens = estTokens(userText); completionTokens = estTokens(answer);
     completion = buildCompletion({ id: "joule-batch-" + started, created: Math.floor(started / 1000), model, content: answer, promptTokens, completionTokens });
   } else {
-    if (!config.upstreamApiKey) throw new Error("UPSTREAM_API_KEY not set");
+    const batchKey = providerKeyFor(tenant);   // the submitting tenant's own provider key
+    if (!batchKey) throw new Error("no provider API key for this workspace");
     const up = await fetch(config.upstreamBaseUrl + "/chat/completions", {
-      method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + config.upstreamApiKey },
+      method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + batchKey },
       body: JSON.stringify({ ...item, model, stream: false }), signal: AbortSignal.timeout(120000)
     });
     completion = await up.json();
@@ -647,6 +660,101 @@ function parseFilter(q) {
     q: typeof q.q === "string" ? q.q.slice(0, 64) : ""
   };
 }
+
+// ---- self-serve onboarding (Phase 1.2) -------------------------------------
+// Browser bootstrap for the login screen. PUBLIC (pre-auth) and deliberately limited to
+// the Supabase project URL + ANON key, which are designed to be public. `authRequired`
+// tells the dashboard whether to show a login screen at all (dev/DRY_RUN runs open).
+app.get("/api/auth-config", (_req, res) => res.json({
+  authRequired: config.auth.required,
+  supabaseUrl: config.auth.supabaseUrl,
+  supabaseAnonKey: config.auth.supabaseAnonKey,
+  configured: Boolean(config.auth.supabaseUrl && config.auth.supabaseAnonKey)
+}));
+
+// A new workspace goes signup -> provider key -> Joule key -> first request with no
+// help from us. All routes are tenant-scoped by dashAuth. Secrets are write-only:
+// a provider key can be SET and its status read, but never read back over the API.
+
+// Onboarding state — drives the wizard and the "waiting for your first request" poll.
+function onboardingState(tenantId) {
+  const requests = store.all(tenantId).length;
+  const keys = tenancy.listKeys(tenantId).filter((k) => !k.revoked);
+  const hasProviderKey = Boolean(tenancy.getUpstreamKey(tenantId));
+  return {
+    steps: { providerKey: hasProviderKey, jouleKey: keys.length > 0, firstRequest: requests > 0 },
+    complete: hasProviderKey && keys.length > 0 && requests > 0,
+    requests,
+    // dryRun workspaces can complete without a provider key (synthesized answers)
+    dryRun: config.dryRun
+  };
+}
+
+// Who am I + what's left to do. The dashboard calls this on load.
+app.get("/api/me", (req, res) => {
+  const tenantId = req.tenant.id;
+  res.json({
+    tenant: { id: tenantId },
+    user: { id: req.tenant.userId || null, email: req.tenant.email || null },
+    endpoint: `${req.protocol}://${req.get("host")}/v1`,   // exact baseURL for their SDK
+    authRequired: config.auth.required,
+    onboarding: onboardingState(tenantId),
+    keys: tenancy.listKeys(tenantId)
+  });
+});
+
+// Lightweight poll for the "waiting for your first request…" state + the activation
+// moment. Returns the tenant's FIRST real record so the UI can celebrate honestly.
+app.get("/api/onboarding", (req, res) => {
+  const tenantId = req.tenant.id;
+  const first = store.all(tenantId)[0] || null;
+  res.json({
+    ...onboardingState(tenantId),
+    firstRequest: first ? {
+      ts: first.ts, model: first.model, tier: first.tier, mode: first.mode,
+      costUsd: first.actual.costUsd, energyWh: first.actual.energyWh, carbonG: first.actual.carbonG,
+      savedUsd: first.saved.costUsd, savedCarbonG: first.saved.carbonG,
+      totalTokens: first.totalTokens,
+      // HONESTY: quality is null until a verification sample lands — never a fake score.
+      qualityScore: first.verification ? first.verification.qualityScore : null
+    } : null
+  });
+});
+
+// STEP 1 — validate + store this tenant's provider key (encrypted at rest, never logged).
+app.post("/api/provider-key", async (req, res) => {
+  const tenantId = req.tenant.id;
+  const apiKey = typeof req.body?.apiKey === "string" ? req.body.apiKey.trim() : "";
+  const baseUrl = typeof req.body?.baseUrl === "string" && req.body.baseUrl.trim() ? req.body.baseUrl.trim() : config.upstreamBaseUrl;
+  if (!apiKey) return res.status(400).json({ ok: false, valid: false, message: "Paste your provider API key." });
+  // real but free validation call (GET /models) so a bad key fails here, not in production
+  const check = await upstream.validateKey({ apiKey, baseUrl });
+  if (!check.valid) return res.status(400).json({ ok: false, valid: false, message: check.message });
+  tenancy.setUpstreamKey(tenantId, apiKey);
+  res.json({ ok: true, valid: true, message: check.message, last4: apiKey.slice(-4), onboarding: onboardingState(tenantId) });
+});
+
+// STEP 2 — mint a Joule API key. The plaintext is returned ONCE and never again.
+app.post("/api/keys", (req, res) => {
+  const tenantId = req.tenant.id;
+  const name = typeof req.body?.name === "string" ? req.body.name.slice(0, 60) : "default";
+  const minted = tenancy.mintKey(tenantId, name);
+  res.status(201).json({
+    key: minted.key,                    // shown ONCE — the UI must tell the user to copy it now
+    id: minted.id, last4: minted.last4, name: minted.name,
+    endpoint: `${req.protocol}://${req.get("host")}/v1`,
+    onboarding: onboardingState(tenantId)
+  });
+});
+
+app.get("/api/keys", (req, res) => res.json({ keys: tenancy.listKeys(req.tenant.id) }));
+
+app.post("/api/keys/:id/revoke", (req, res) => {
+  // scope the revoke to THIS tenant's keys — you can never revoke another tenant's key
+  const owned = tenancy.listKeys(req.tenant.id).some((k) => k.id === req.params.id);
+  if (!owned) return res.status(404).json({ ok: false, message: "key not found" });
+  res.json({ ok: tenancy.revokeKey(req.params.id) });
+});
 
 // Server-computed aggregates + time-series + per-model + sessions, all from the
 // real log and filtered by range/tier/mode/model — the dashboard renders this so
@@ -815,6 +923,15 @@ app.post("/api/config", (req, res) => {
   const keys = Object.keys(body);
   const unknown = keys.filter((k) => !CONFIG_FIELDS[k]);
   if (unknown.length) return res.status(400).json({ error: { message: "unknown field(s): " + unknown.join(", ") } });
+  // MULTI-TENANT SAFETY: these are PROCESS-GLOBAL settings. In a multi-tenant deployment
+  // one tenant must never rewrite them for everyone — provider keys are per-tenant and go
+  // through /api/provider-key instead. (Single-tenant/dev keeps the old behaviour.)
+  if (config.auth.required) {
+    const globalOnly = keys.filter((k) => ["upstreamApiKey", "emToken", "dryRun", "routingEnabled", "modelSmall", "modelLarge", "upstreamBaseUrl", "gridZone"].includes(k));
+    if (globalOnly.length) {
+      return res.status(403).json({ error: { message: "These are deployment-wide settings and can't be changed per workspace. Set your own provider key with POST /api/provider-key.", type: "invalid_request_error", code: "global_config_forbidden" } });
+    }
+  }
 
   const toApply = {};
   try {

@@ -44,11 +44,13 @@ function cleanError(status, message) {
   return { error: { message: String(message || "upstream request failed"), type, code: status || null } };
 }
 
-// one network attempt; throws only on network/timeout (caller treats as transient)
-async function attempt(bodyObj, stream, timeoutMs) {
+// one network attempt; throws only on network/timeout (caller treats as transient).
+// `apiKey` is the TENANT's provider key (falls back to the global env key for the
+// single-tenant/dev path). Used as a bearer token only — never logged.
+async function attempt(bodyObj, stream, timeoutMs, apiKey) {
   return fetchImpl(config.upstreamBaseUrl + "/chat/completions", {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: "Bearer " + config.upstreamApiKey },
+    headers: { "content-type": "application/json", authorization: "Bearer " + (apiKey || config.upstreamApiKey) },
     body: JSON.stringify(bodyObj),
     signal: AbortSignal.timeout(timeoutMs || config.upstream.timeoutMs)
   });
@@ -56,13 +58,13 @@ async function attempt(bodyObj, stream, timeoutMs) {
 
 // Try one model with up to maxRetries extra attempts. `doAttempt(model)` resolves to
 // { ok, status, value } or throws (network/timeout => transient). Retries transient only.
-async function runModel(model, buildBody, stream, timeoutMs) {
+async function runModel(model, buildBody, stream, timeoutMs, apiKey) {
   const maxRetries = Math.max(0, config.upstream.maxRetries);
   let last = { ok: false, status: 0, value: null };
   for (let i = 0; i <= maxRetries; i++) {
     if (i > 0) await sleep(backoffMs(i - 1));
     try {
-      const resp = await attempt(buildBody(model), stream, timeoutMs);
+      const resp = await attempt(buildBody(model), stream, timeoutMs, apiKey);
       if (resp.ok) return { ok: true, status: resp.status, value: resp };
       const data = await resp.json().catch(() => cleanError(resp.status, "upstream error " + resp.status));
       last = { ok: false, status: resp.status, value: data };
@@ -88,12 +90,12 @@ function modelChain(primary) {
 
 // Shared driver across the model chain. Returns the first ok result; on a non-transient
 // (client) failure returns immediately (no failover); otherwise tries the fallback model.
-async function drive(primary, buildBody, stream, timeoutMs) {
+async function drive(primary, buildBody, stream, timeoutMs, apiKey) {
   const chain = modelChain(primary);
   let result, attempts = 0, modelUsed = primary;
   for (const model of chain) {
     modelUsed = model; attempts++;
-    result = await runModel(model, buildBody, stream, timeoutMs);
+    result = await runModel(model, buildBody, stream, timeoutMs, apiKey);
     if (result.ok) { mark(true, result.status); return { ...result, modelUsed, attempts }; }
     if (result.status && !isTransient(result.status)) { mark(false, result.status); return { ...result, modelUsed, attempts }; }
     if (chain.length > 1 && model !== chain[chain.length - 1]) console.warn(`[upstream] ${model} exhausted — falling back to ${config.upstream.fallbackModel}`);
@@ -103,8 +105,8 @@ async function drive(primary, buildBody, stream, timeoutMs) {
 }
 
 // Non-streaming: returns parsed JSON on success, else a clean OpenAI-shaped error.
-async function callJson({ model, buildBody, timeoutMs }) {
-  const r = await drive(model, buildBody, false, timeoutMs);
+async function callJson({ model, buildBody, timeoutMs, apiKey }) {
+  const r = await drive(model, buildBody, false, timeoutMs, apiKey);
   if (r.ok) {
     const data = await r.value.json().catch(() => null);
     if (!data || !data.choices) return { ok: false, status: 502, error: cleanError(502, "malformed provider response").error, modelUsed: r.modelUsed, attempts: r.attempts };
@@ -116,11 +118,35 @@ async function callJson({ model, buildBody, timeoutMs }) {
 
 // Streaming: returns the raw Response to pipe on success, else a clean error. Retries/
 // fallback apply to the INITIAL connection only — once bytes flow we can't safely retry.
-async function openStream({ model, buildBody, timeoutMs }) {
-  const r = await drive(model, buildBody, true, timeoutMs);
+async function openStream({ model, buildBody, timeoutMs, apiKey }) {
+  const r = await drive(model, buildBody, true, timeoutMs, apiKey);
   if (r.ok) return { ok: true, status: r.status, response: r.value, modelUsed: r.modelUsed, attempts: r.attempts };
   const error = (r.value && r.value.error) ? r.value.error : cleanError(r.status, "upstream request failed").error;
   return { ok: false, status: r.status || 502, error, modelUsed: r.modelUsed, attempts: r.attempts };
 }
 
-module.exports = { callJson, openStream, providerHealth, resetHealth, setFetch, isTransient, _health: () => health };
+/**
+ * Validate a provider key with a REAL but lightweight call (GET /models — generates no
+ * tokens, costs nothing). Onboarding step 1 uses this so a bad key fails immediately and
+ * legibly instead of at the user's first real request. The key is never logged.
+ * Returns { valid, status, message } and never throws.
+ */
+async function validateKey({ apiKey, baseUrl } = {}) {
+  const key = String(apiKey || "").trim();
+  if (!key) return { valid: false, status: 400, message: "No API key provided." };
+  const base = String(baseUrl || config.upstreamBaseUrl || "").replace(/\/$/, "");
+  try {
+    const res = await fetchImpl(base + "/models", {
+      method: "GET",
+      headers: { authorization: "Bearer " + key },
+      signal: AbortSignal.timeout(15000)
+    });
+    if (res.ok) return { valid: true, status: res.status, message: "Key verified with your provider." };
+    if (res.status === 401 || res.status === 403) return { valid: false, status: res.status, message: "Your provider rejected this key. Check you copied all of it." };
+    return { valid: false, status: res.status, message: `Provider returned ${res.status}. Check the base URL matches this key's provider.` };
+  } catch (err) {
+    return { valid: false, status: 0, message: "Could not reach the provider: " + scrub(err) };
+  }
+}
+
+module.exports = { callJson, openStream, validateKey, providerHealth, resetHealth, setFetch, isTransient, _health: () => health };
