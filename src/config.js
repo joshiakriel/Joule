@@ -68,6 +68,19 @@ const config = {
   subscriptionCostMonthly: num(process.env.SUBSCRIPTION_COST_MONTHLY, 0),
 
   /**
+   * Weekly value digest — keeps savings visible when nobody is on the dashboard.
+   * Provider-agnostic HTTP JSON email (Resend by default; any compatible endpoint via
+   * DIGEST_API_URL). With no DIGEST_API_KEY the digest still renders IN-APP at
+   * /api/digest and sending simply no-ops — nothing on the serving path depends on it.
+   */
+  digest: {
+    enabled: bool(process.env.DIGEST_ENABLED, true),
+    apiUrl: process.env.DIGEST_API_URL || "https://api.resend.com/emails",
+    apiKey: process.env.DIGEST_API_KEY || "",
+    from: process.env.DIGEST_FROM || "Joule <digest@joule.local>"
+  },
+
+  /**
    * Multi-tenant auth (Phase 1.1). Two entry points:
    *   - /v1/*  (the OpenAI-compatible proxy): a customer's JOULE API KEY (Bearer jk_...)
    *     resolves to their tenant; that tenant's encrypted upstream key makes the real call.

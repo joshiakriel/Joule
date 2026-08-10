@@ -229,6 +229,64 @@ function brandFallback(img){var n=(parseInt(img.dataset.try||"0",10))+1;img.data
   .getstarted p{margin:0 0 11px;color:var(--muted);font-size:13px;line-height:1.55}
   .gs-btn{padding:9px 16px;border-radius:8px;border:0;background:var(--brand,#33E3C7);color:#062024;font-weight:600;font-size:13px;cursor:pointer}
   @media (max-width:560px){ .gate-card,.wiz{max-width:100%} .gate{padding:12px} .wiz-nav button{min-width:100%} }
+
+  /* ---- Phase 2.1: value surface / ROI headline ---- */
+  .val{background:var(--panel,#121821);border:1px solid var(--line,#1e2733);border-radius:14px;padding:18px 20px;margin-bottom:16px}
+  .val-since{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px}
+  .val-top{display:flex;flex-wrap:wrap;gap:22px;align-items:flex-end}
+  .val-hero .vh-n{font-size:34px;font-weight:700;line-height:1.05;color:var(--cyan,#33E3C7)}
+  .val-hero .vh-l{font-size:12px;color:var(--muted);margin-top:3px}
+  .val-q{padding-left:22px;border-left:1px solid var(--line,#1e2733)}
+  .val-q .vq-n{font-size:22px;font-weight:600}
+  .val-q .vq-l{font-size:12px;color:var(--muted);margin-top:3px}
+  .val-side{display:flex;gap:20px;flex-wrap:wrap;margin-left:auto}
+  .val-side .vs-n{font-size:15px;font-weight:600}
+  .val-side .vs-l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
+  .val-net{margin-top:14px;padding-top:12px;border-top:1px solid var(--line,#1e2733);font-size:12.5px;color:var(--muted);line-height:1.7}
+  .val-chart{margin-top:12px}
+  .lg{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:6px}
+  .lg i{display:inline-block;width:16px;height:2px;vertical-align:middle;margin-right:5px}
+  .levers{margin-top:14px}
+  .lev-h{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:12px 0 7px}
+  .lev{display:flex;align-items:center;gap:10px;margin-bottom:7px;font-size:13px}
+  .lev-bar{flex:1;height:7px;background:#0d131b;border-radius:4px;overflow:hidden;min-width:60px}
+  .lev-bar span{display:block;height:100%;background:var(--cyan,#33E3C7);border-radius:4px}
+  .lev-amt{font-variant-numeric:tabular-nums;min-width:74px;text-align:right;font-weight:600}
+  .lev-nm{min-width:150px}
+  .risk{font-size:10px;padding:1px 6px;border-radius:99px;border:1px solid var(--line,#1e2733);color:var(--muted);white-space:nowrap}
+  .risk.none{color:var(--cyan,#33E3C7);border-color:rgba(51,227,199,.4)}
+  .risk.verified{color:#7fb2ff;border-color:rgba(127,178,255,.4)}
+  .risk.estimated{color:#ffcc66;border-color:rgba(255,204,102,.4)}
+  .risk\.quality-risk,.risk.quality-risk{color:#ff9a9a;border-color:rgba(255,90,90,.4)}
+  .val-empty{color:var(--muted);font-size:13px;line-height:1.6}
+  @media (max-width:640px){ .val-q{padding-left:0;border-left:0} .val-side{margin-left:0} .val-hero .vh-n{font-size:27px} }
+
+  /* ---- Phase 2.0: information architecture — nav + views ---- */
+  .nav{display:flex;align-items:center;gap:4px;margin:6px 0 22px;border-bottom:1px solid var(--line,#1e2733);flex-wrap:wrap}
+  .nav a{padding:10px 16px;font-size:14px;color:var(--muted);text-decoration:none;border-bottom:2px solid transparent;margin-bottom:-1px;border-radius:6px 6px 0 0}
+  .nav a:hover{color:#e8eef5;background:rgba(255,255,255,.03)}
+  .nav a.on{color:var(--cyan,#33E3C7);border-bottom-color:var(--cyan,#33E3C7)}
+  .nav a:focus-visible{outline:2px solid var(--cyan,#33E3C7);outline-offset:-2px}
+  .nav-sp{flex:1}
+  [data-view]{display:none}
+  [data-view].shown{display:block}
+  .view-head{margin:0 0 4px;font-size:20px;font-weight:650;letter-spacing:-.2px}
+  .view-sub{color:var(--muted);font-size:13.5px;margin-bottom:20px;line-height:1.55;max-width:62ch}
+  .sec-h{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin:26px 0 10px;font-weight:600}
+  /* one consolidated empty state — never six stacked "No … yet" boxes */
+  .zero{background:var(--panel,#121821);border:1px solid var(--line,#1e2733);border-radius:14px;padding:40px 24px;text-align:center}
+  .zero .z-i{font-size:30px;margin-bottom:10px;opacity:.8}
+  .zero h3{margin:0 0 6px;font-size:17px}
+  .zero p{margin:0 auto 16px;color:var(--muted);font-size:13.5px;line-height:1.6;max-width:44ch}
+  .zero button{padding:10px 20px;border-radius:8px;border:0;background:var(--cyan,#33E3C7);color:#062024;font-weight:600;font-size:13.5px;cursor:pointer}
+  /* this-week strip on HOME */
+  .week{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+  .week .wk{background:var(--panel,#121821);border:1px solid var(--line,#1e2733);border-radius:12px;padding:15px 16px}
+  .week .wk-l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.45px}
+  .week .wk-n{font-size:19px;font-weight:650;margin-top:5px}
+  .week .wk-s{font-size:11.5px;color:var(--muted);margin-top:3px}
+  .quiet{color:var(--muted);font-size:13.5px;background:var(--panel,#121821);border:1px solid var(--line,#1e2733);border-radius:12px;padding:18px 20px;line-height:1.6}
+  @media (max-width:560px){ .nav a{padding:9px 12px;font-size:13px} }
 </style>
 </head>
 <body>
@@ -307,17 +365,35 @@ function brandFallback(img){var n=(parseInt(img.dataset.try||"0",10))+1;img.data
       <img id="brandLogo" class="brand-logo" src="logo.png" alt="Joule" onerror="brandFallback(this)">
       <div class="brand-inline" id="brandInline" style="display:none;align-items:center;gap:12px">
         <div class="mark"><svg viewBox="0 0 24 24" fill="none"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z" fill="#33E3C7" stroke="#33E3C7" stroke-width="1.1" stroke-linejoin="round"/></svg></div>
-        <div><h1>Joule</h1><div class="sub">live console</div></div>
+        <div><h1>Joule</h1><div class="sub">AI cost &amp; carbon control</div></div>
       </div>
     </div>
     <div class="status" id="status"></div>
   </header>
-  <div class="tagline">Real proxy, real tokens, real grid. Point any OpenAI client at <span class="mono cyan">/v1</span>, or send a test prompt below — Joule routes it, meters cost · energy · carbon, and logs an auditable record.</div>
+  <nav class="nav" id="nav" role="navigation" aria-label="Sections">
+    <a href="#home" data-nav="home">Home</a>
+    <a href="#activity" data-nav="activity">Activity</a>
+    <a href="#settings" data-nav="settings">Settings</a>
+    <span class="nav-sp"></span>
+  </nav>
 
   <div class="banner ok" id="banner" style="display:none"></div>
-  <div id="getStartedHost"></div>
+  <div id="getStartedHost" data-view="home"></div>
 
-  <div class="arch">
+  <!-- ============ HOME — outcomes only. Nothing competes with the hero. ============ -->
+  <div data-view="home" id="homeHead">
+    <h2 class="view-head" id="homeTitle">Your savings</h2>
+    <div class="view-sub" id="homeSub">What Joule has saved you, after its own cost — and the quality held while saving it.</div>
+  </div>
+  <!-- ROI hero (Phase 2.1): net $ saved paired with quality-held, then the savings chart -->
+  <div id="valueHost" data-view="home"></div>
+  <div data-view="home" id="weekWrap" style="display:none">
+    <div class="sec-h">This week</div>
+    <div id="weekHost"></div>
+  </div>
+  <div data-view="home" id="homeZero" style="display:none"></div>
+
+  <div class="arch" data-view="settings">
     <div class="arch-flow">
       <div class="arch-node client"><div class="an-t">Your app / agent</div><div class="an-s">OpenAI SDK · baseURL → Joule</div></div>
       <div class="arch-ar">→</div>
@@ -329,13 +405,13 @@ function brandFallback(img){var n=(parseInt(img.dataset.try||"0",10))+1;img.data
       <div class="arch-node prov"><div class="an-t">Model provider</div><div class="an-s" id="archProv">model provider</div></div>
     </div>
     <div class="arch-grid" id="archGridRow"><span class="gdot"></span> <span id="archGridTxt">Grid carbon intensity feeds Joule's metering — cost · energy · CO₂ per request</span></div>
-    <div class="snip">
+    <div class="snip" data-view="settings">
       <div class="snip-h"><span>Point any OpenAI client at Joule — change one line:</span><button class="copy" id="copySnip">Copy</button></div>
       <pre id="snippet"></pre>
     </div>
   </div>
 
-  <div class="toolbar" id="toolbar">
+  <div class="toolbar" id="toolbar" data-view="activity">
     <div class="seg" id="rangeSeg">
       <button data-range="1h">1h</button>
       <button data-range="24h">24h</button>
@@ -347,12 +423,11 @@ function brandFallback(img){var n=(parseInt(img.dataset.try||"0",10))+1;img.data
     <input class="tb-search" type="text" id="fSearch" placeholder="search model…" autocomplete="off">
     <span class="tb-spacer"></span>
     <span class="tb-count" id="fCount"></span>
-    <button class="tb-danger" id="clearBtn">Clear data</button>
   </div>
 
-  <div class="grid">
+  <div class="grid" data-view="activity">
     <div class="card">
-      <h2>01 · Send a test prompt</h2>
+      <h2>Try a prompt</h2>
       <textarea id="q" placeholder="Type a prompt, or tap an example…"></textarea>
       <div class="chips" id="chips"></div>
       <div class="run">
@@ -364,7 +439,7 @@ function brandFallback(img){var n=(parseInt(img.dataset.try||"0",10))+1;img.data
     </div>
 
     <div class="card">
-      <h2 id="ovH2">02 · Selected activity vs. "always large model"</h2>
+      <h2 id="ovH2">Selected activity vs. always using the large model</h2>
       <div class="meter-row">
         <div class="meter-lbl"><span>Baseline energy <span class="muted">(routed · always-large)</span></span><span class="v" id="baseWh">0 Wh</span></div>
         <div class="meter base"><div class="fill" id="baseFill"></div></div>
@@ -386,40 +461,35 @@ function brandFallback(img){var n=(parseInt(img.dataset.try||"0",10))+1;img.data
     </div>
   </div>
 
-  <div class="card" style="margin-top:18px">
+  <div class="card" data-view="activity" style="margin-top:18px">
     <h2>Activity over time — energy metered vs. always-large baseline</h2>
     <div class="chart-lgnd"><span><i class="a"></i>Joule (actual)</span><span><i class="b"></i>always-large baseline</span></div>
     <div class="chart" id="chart"></div>
     <div class="chart-x"><span id="chartFrom">—</span><span id="chartTo">now</span></div>
   </div>
 
-  <div class="card" id="budgetCard" style="margin-top:18px;display:none">
+  <div class="card" id="budgetCard" data-view="activity" style="margin-top:18px;display:none">
     <h2>Budget <span class="muted" style="text-transform:none;letter-spacing:0">— metering reports; enforcement prevents overspend</span></h2>
     <div id="budgetBody"></div>
   </div>
 
-  <div class="card" id="cacheCard" style="margin-top:18px">
+  <div class="card" id="cacheCard" data-view="activity" style="margin-top:18px">
     <h2>Cache &amp; advisory <span class="muted" style="text-transform:none;letter-spacing:0">— zero-quality-risk savings, ahead of routing in the stack</span></h2>
     <div id="cacheBody"><div class="empty-log">No requests yet.</div></div>
   </div>
 
-  <div class="card" id="roiCard" style="margin-top:18px">
-    <h2>ROI since day one <span class="muted" style="text-transform:none;letter-spacing:0">— savings compound; verification &amp; fees netted out</span></h2>
-    <div id="roiBody"><div class="empty-log">No history yet.</div></div>
-  </div>
-
-  <div class="card logwrap">
-    <h2>Sessions / runs <span class="muted" style="text-transform:none;letter-spacing:0">— an agent run = one session</span></h2>
+  <div class="card logwrap" data-view="activity">
+    <h2>Sessions <span class="muted" style="text-transform:none;letter-spacing:0">— an agent run = one session</span></h2>
     <div id="sessBox"><div class="empty-log">No sessions yet.</div></div>
   </div>
 
-  <div class="card logwrap">
-    <h2>Per-model &amp; per-tier breakdown</h2>
+  <div class="card logwrap" data-view="activity">
+    <h2>By model &amp; tier</h2>
     <div id="modelBox"><div class="empty-log">No requests yet.</div></div>
   </div>
 
-  <div class="card" id="cfgCard" style="margin-top:18px">
-    <h2>Configure your instance</h2>
+  <div class="card" id="cfgCard" data-view="settings" style="margin-top:18px">
+    <h2>Workspace configuration</h2>
     <p class="cfg-lead">Set the provider key, models and grid region for this Joule instance. Values set here override the environment defaults and are kept <b>in memory only</b> — never written to disk, never returned by the API. <span class="muted">(Single-tenant demo convenience — see the README security note.)</span></p>
     <div class="cfg-grid">
       <label class="cfg-f">
@@ -457,8 +527,15 @@ function brandFallback(img){var n=(parseInt(img.dataset.try||"0",10))+1;img.data
     </div>
   </div>
 
-  <div class="card logwrap">
-    <h2>03 · Routing log (live)</h2>
+  <!-- Destructive actions belong in Settings, never on the customer's home view -->
+  <div class="card" data-view="settings" style="margin-top:18px;border-color:rgba(255,90,90,.32)">
+    <h2>Danger zone</h2>
+    <p class="view-sub" style="margin:6px 0 14px">Permanently deletes this workspace's request history, savings totals and reports. This can't be undone, and affects only your workspace.</p>
+    <button class="tb-danger" id="clearBtn">Delete all my data</button>
+  </div>
+
+  <div class="card logwrap" data-view="activity">
+    <h2>Request log</h2>
     <div id="logbox"><div class="empty-log">No requests yet.</div></div>
   </div>
 
@@ -646,7 +723,8 @@ function celebrate(fr) {
       (fr.qualityScore == null ? "pending verification" : (fr.qualityScore * 100).toFixed(0) + "%") + '</div></div>';
   showStep(4);
 }
-gel("toDash").onclick = () => { closeWizard(); refresh(); };
+// onboarding hands off into the new HOME view, where their first result is the hero
+gel("toDash").onclick = () => { closeWizard(); location.hash = "#home"; showView("home"); refresh(); };
 
 // ---- boot: decide between login screen, wizard, or straight to the dashboard ----
 async function startApp() {
@@ -752,6 +830,7 @@ async function refresh() {
   let meta, view, advisory;
   // keep the "Get started" panel in step with onboarding progress (cheap, tolerant)
   try { if (!ME || !ME.onboarding || !ME.onboarding.complete) { ME = await (await fetch("/api/me")).json(); await paintGetStarted(); } } catch { /* pre-auth or offline */ }
+  if (CURRENT_VIEW === "home") { paintValue(); paintWeek(); }   // hero: net savings paired with quality
   try {
     [meta, view, advisory] = await Promise.all([
       fetch("/api/stats").then(r => r.json()),
@@ -877,7 +956,6 @@ async function refresh() {
   renderSessions(view.sessions);
   renderModels(view.perModel);
   renderLog(view.recent);
-  renderRoi();
 
   // exports carry the active filter so you download exactly what you see
   $("dljson").href = "/api/report?format=json&" + qs();
@@ -1019,34 +1097,6 @@ function renderCache(c, batch, reasoning, advisory) {
   box.innerHTML = html + batchLine + reasoningLine + advLine;
 }
 
-async function renderRoi() {
-  let r; try { r = await (await fetch("/api/roi")).json(); } catch { return; }
-  const box = $("roiBody");
-  if (r.empty) { box.innerHTML = '<div class="empty-log">No history yet — run some traffic to see cumulative savings.</div>'; return; }
-  const start = new Date(r.startDate + "T00:00:00Z").toLocaleDateString();
-  const kg = r.lifetime.savedCarbonG / 1000;
-  const net = r.net;
-  // hand-rolled cumulative SVG (no chart library)
-  const w = 560, h = 90, pad = 4, s = r.series;
-  const xs = s.map((_, i) => s.length > 1 ? pad + i / (s.length - 1) * (w - 2 * pad) : w / 2);
-  const maxC = Math.max(...s.map((d) => d.cumSavedCost), 1e-9);
-  const ys = s.map((d) => h - pad - (d.cumSavedCost / maxC) * (h - 2 * pad));
-  const pts = xs.map((x, i) => x.toFixed(1) + "," + ys[i].toFixed(1)).join(" ");
-  const area = pad + "," + (h - pad) + " " + pts + " " + xs[xs.length - 1].toFixed(1) + "," + (h - pad);
-  box.innerHTML =
-    '<div class="roi-head">You\'ve saved <b class="cyan">' + fmtUsd(net.grossSaved) + '</b> and <b class="cyan">' + kg.toFixed(2) + ' kg CO₂</b> since ' + esc(start) +
-      ' <span class="muted">(' + r.lifetime.requests + ' requests over ' + r.days + ' day' + (r.days === 1 ? '' : 's') + ')</span></div>' +
-    '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" style="width:100%;height:90px;margin-top:10px">' +
-      '<polygon points="' + area + '" fill="rgba(51,227,199,.12)"/>' +
-      '<polyline points="' + pts + '" fill="none" stroke="var(--cyan)" stroke-width="2"/>' +
-    '</svg>' +
-    '<div class="netline">net of fees — gross saved <b>' + fmtUsd(net.grossSaved) + '</b> − verification <b>' + fmtUsd(net.verifyCost) + '</b>' +
-      (net.subscriptionMonthly > 0 ? (' − subscription <b>' + fmtUsd(net.subscriptionToDate) + '</b> ($' + net.subscriptionMonthly + '/mo)') : '') +
-      ' = <b class="' + (net.netAfterFees >= 0 ? 'cyan' : 'q-warn') + '">' + fmtUsd(net.netAfterFees) + '</b>' +
-      '<br>avg monthly saving <b>' + fmtUsd(net.avgMonthlySaving) + '</b>' +
-      (net.paybackMonths != null ? (' · payback in <b>' + net.paybackMonths.toFixed(1) + '</b> months') : ' · set SUBSCRIPTION_COST_MONTHLY for payback') + '</div>';
-}
-
 function renderModels(perModel) {
   const box = $("modelBox");
   if (!perModel.length) { box.innerHTML = '<div class="empty-log">No requests match this filter.</div>'; return; }
@@ -1148,8 +1198,162 @@ $("cfg-save").onclick = saveConfig;
 
 // Boot through the auth gate: it decides login screen vs. wizard vs. dashboard, then
 // calls startApp() -> refresh(). Polling only runs once we're actually past the gate.
+showView((location.hash || "#home").slice(1));   // real navigation, back/forward friendly
 bootAuth();
 setInterval(() => { if (!AUTH_CFG.authRequired || ACCESS_TOKEN) refresh(); }, 4000);
+
+/* ---------- Phase 2.0: information architecture ----------
+   Three areas behind real navigation. HOME shows outcomes only; ACTIVITY holds the detail
+   for people who want it; SETTINGS holds every operator/config control and all destructive
+   actions. Panels are tagged data-view and switched here — no duplicated markup. */
+const VIEWS = ["home", "activity", "settings"];
+const VIEW_COPY = {
+  home:     { t: "Your savings", s: "What Joule has saved you, after its own cost — and the quality held while saving it." },
+  activity: { t: "Activity", s: "Every request Joule has handled for you, with per-model and per-session detail." },
+  settings: { t: "Settings", s: "Your provider key, models, region and API keys. Only you can see these." }
+};
+let CURRENT_VIEW = "home";
+
+function showView(v) {
+  if (!VIEWS.includes(v)) v = "home";
+  CURRENT_VIEW = v;
+  document.querySelectorAll("[data-view]").forEach((el) => el.classList.toggle("shown", el.getAttribute("data-view") === v));
+  document.querySelectorAll("[data-nav]").forEach((a) => {
+    const on = a.getAttribute("data-nav") === v;
+    a.classList.toggle("on", on);
+    if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+  });
+  const h = gel("homeTitle"), sub = gel("homeSub");
+  if (h && v !== "home") { h.textContent = VIEW_COPY[v].t; sub.textContent = VIEW_COPY[v].s; }
+  if (h && v === "home") { h.textContent = VIEW_COPY.home.t; sub.textContent = VIEW_COPY.home.s; }
+  // the heading block itself belongs to whichever view is active
+  const hh = gel("homeHead"); if (hh) { hh.setAttribute("data-view", v); hh.classList.add("shown"); }
+  if (v === "home") { paintValue(); paintWeek(); }
+  window.scrollTo({ top: 0, behavior: "instant" in window ? "instant" : "auto" });
+}
+window.addEventListener("hashchange", () => showView((location.hash || "#home").slice(1)));
+
+/* ---------- HOME: this-week summary (outcome language only) ---------- */
+async function paintWeek() {
+  const wrap = gel("weekWrap"), host = gel("weekHost");
+  if (!wrap || !host) return;
+  let d; try { d = await (await fetch("/api/digest?days=7")).json(); } catch { wrap.style.display = "none"; return; }
+  wrap.style.display = "block";
+  if (!d.hasTraffic) {
+    host.innerHTML = '<div class="quiet">No requests this week. Your savings pick up again as soon as your traffic does.</div>';
+    return;
+  }
+  const q = d.quality.score == null
+    ? '<div class="wk-n" style="font-size:14px;color:var(--muted)">not yet verified</div><div class="wk-s">no samples judged yet</div>'
+    : '<div class="wk-n">' + (d.quality.score * 100).toFixed(1) + '%</div><div class="wk-s">' + d.quality.verified + ' verified' + (d.quality.sufficient ? '' : ' · not yet a guarantee') + '</div>';
+  host.innerHTML = '<div class="week">' +
+    '<div class="wk"><div class="wk-l">Saved this week</div><div class="wk-n cyan">' + fmtUsd(d.saved.netUsd) + '</div><div class="wk-s">net · gross ' + fmtUsd(d.saved.grossUsd) + '</div></div>' +
+    '<div class="wk"><div class="wk-l">Quality held</div>' + q + '</div>' +
+    '<div class="wk"><div class="wk-l">Requests</div><div class="wk-n">' + d.requests + '</div><div class="wk-s">spend ' + fmtUsd(d.spend.costUsd) + '</div></div>' +
+    '<div class="wk"><div class="wk-l">CO₂ avoided</div><div class="wk-n">' + d.saved.carbonG.toFixed(1) + ' g</div><div class="wk-s">estimated</div></div>' +
+  '</div>' +
+  (d.topModels.length ? '<div class="wk" style="margin-top:12px"><div class="wk-l">Top cost driver</div><div class="wk-n" style="font-size:15px">' + esc(d.topModels[0].model) + '</div><div class="wk-s">' + d.topModels[0].requests + ' requests · ' + fmtUsd(d.topModels[0].costUsd) + '</div></div>' : '') +
+  (d.advisory ? '<div class="quiet" style="margin-top:12px"><b>Suggestion:</b> ' + esc(d.advisory.title || d.advisory.id) + '</div>' : '');
+}
+
+/* ---------- Phase 2.1: the value surface ----------
+   Savings are NEVER rendered without the quality that was held while making them, and
+   never as gross-only — the net-of-fees figure sits right beside it. Nothing is faked:
+   with no data we say so; with too few verified samples we say that too. */
+async function paintValue() {
+  const host = $("valueHost");
+  if (!host) return;
+  let r; try { r = await (await fetch("/api/roi")).json(); } catch { return; }
+
+  // PROGRESSIVE DISCLOSURE: with no data, HOME collapses to ONE empty state with a single
+  // call to action — never a stack of "No … yet" boxes, and never fabricated numbers.
+  if (r.empty) {
+    host.innerHTML = "";
+    const wk = gel("weekWrap"); if (wk) wk.style.display = "none";
+    const z = gel("homeZero");
+    if (z) {
+      z.style.display = "block";
+      z.innerHTML = '<div class="zero"><div class="z-i">⚡</div>' +
+        '<h3>No savings to show yet</h3>' +
+        '<p>Once your app sends its first request through Joule, this page fills with your real numbers — what you saved, and the quality held while saving it. We never show sample data.</p>' +
+        '<button id="zeroCta" type="button">Connect your app</button></div>';
+      gel("zeroCta").onclick = () => {
+        if (ME && ME.onboarding && !ME.onboarding.complete) { const s = ME.onboarding.steps; openWizard(!s.providerKey ? 1 : !s.jouleKey ? 2 : 3); }
+        else location.hash = "#settings";
+      };
+    }
+    return;
+  }
+  const z0 = gel("homeZero"); if (z0) z0.style.display = "none";
+
+  const since = new Date(r.startDate + "T00:00:00Z").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  const n = r.net, q = r.quality;
+  const kg = r.lifetime.savedCarbonG / 1000;
+
+  // quality, paired — honest about insufficient samples
+  const qHtml = q.score == null
+    ? '<div class="vq-n muted" style="font-size:15px">not yet verified</div><div class="vq-l">quality — no samples judged yet</div>'
+    : '<div class="vq-n">' + (q.score * 100).toFixed(1) + '%</div><div class="vq-l">quality held · ' + q.verified + ' verified' +
+      (q.sufficient ? '' : ' <span style="color:#ffcc66">(below ' + q.minSamples + ' — not yet a guarantee)</span>') + '</div>';
+
+  // cumulative chart: gross (area) + net-of-fees (dashed) — hand-rolled SVG, no library
+  const s = r.series, w = 600, h = 110, pad = 6;
+  const xs = s.map((_, i) => s.length > 1 ? pad + i / (s.length - 1) * (w - 2 * pad) : w / 2);
+  const lo = Math.min(0, ...s.map((d) => d.cumNet));
+  const hi = Math.max(...s.map((d) => d.cumSavedCost), 1e-9);
+  const Y = (v) => h - pad - ((v - lo) / ((hi - lo) || 1e-9)) * (h - 2 * pad);
+  const line = (key) => xs.map((x, i) => x.toFixed(1) + "," + Y(s[i][key]).toFixed(1)).join(" ");
+  const gross = line("cumSavedCost"), net = line("cumNet");
+  const zeroY = Y(0).toFixed(1);
+
+  const leverRow = (l, max) => '<div class="lev"><span class="lev-nm">' + esc(l.label) + '</span>' +
+    '<span class="lev-bar"><span style="width:' + Math.max(0, Math.min(100, (l.savedUsd / (max || 1)) * 100)).toFixed(1) + '%"></span></span>' +
+    '<span class="risk ' + esc(l.risk) + '" title="' + esc(l.note) + '">' + esc(l.risk) + '</span>' +
+    '<span class="lev-amt">' + fmtUsd(l.savedUsd) + '</span></div>';
+  const baseL = r.levers.filter((l) => l.basis === "baseline");
+  const addL = r.levers.filter((l) => l.basis === "additional");
+  const maxBase = Math.max(...baseL.map((l) => Math.abs(l.savedUsd)), 1e-9);
+  const maxAdd = Math.max(...addL.map((l) => Math.abs(l.savedUsd)), 1e-9);
+
+  host.innerHTML =
+    '<div class="val">' +
+      '<div class="val-since">Since ' + esc(since) + ' · ' + r.days + ' day' + (r.days === 1 ? '' : 's') + ' · ' + r.lifetime.requests + ' requests optimised</div>' +
+      '<div class="val-top">' +
+        '<div class="val-hero"><div class="vh-n">' + fmtUsd(n.netAfterFees) + '</div><div class="vh-l">net saved, after Joule\'s own cost</div></div>' +
+        '<div class="val-q">' + qHtml + '</div>' +
+        '<div class="val-side">' +
+          '<div><div class="vs-n">' + fmtUsd(n.grossSaved) + '</div><div class="vs-l">gross saved</div></div>' +
+          '<div><div class="vs-n">' + kg.toFixed(2) + ' kg</div><div class="vs-l">CO₂ avoided ·&nbsp;est</div></div>' +
+          '<div><div class="vs-n">' + fmtWh(r.lifetime.savedEnergyWh) + '</div><div class="vs-l">energy ·&nbsp;est</div></div>' +
+        '</div>' +
+      '</div>' +
+
+      '<div class="val-chart"><svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" style="width:100%;height:110px">' +
+        '<polygon points="' + pad + ',' + zeroY + ' ' + gross + ' ' + xs[xs.length - 1].toFixed(1) + ',' + zeroY + '" fill="rgba(51,227,199,.12)"/>' +
+        '<line x1="' + pad + '" y1="' + zeroY + '" x2="' + (w - pad) + '" y2="' + zeroY + '" stroke="var(--line,#1e2733)" stroke-width="1"/>' +
+        '<polyline points="' + gross + '" fill="none" stroke="var(--cyan,#33E3C7)" stroke-width="2"/>' +
+        '<polyline points="' + net + '" fill="none" stroke="#7fb2ff" stroke-width="1.6" stroke-dasharray="4 3"/>' +
+      '</svg>' +
+      '<div class="lg"><span><i style="background:var(--cyan,#33E3C7)"></i>cumulative gross saved</span>' +
+        '<span><i style="background:#7fb2ff"></i>net of verification' + (n.subscriptionMonthly > 0 ? ' + subscription' : '') + '</span></div></div>' +
+
+      '<div class="val-net">' +
+        'gross <b>' + fmtUsd(n.grossSaved) + '</b> − verification <b>' + fmtUsd(n.verifyCost) + '</b>' +
+        (n.subscriptionMonthly > 0 ? ' − subscription <b>' + fmtUsd(n.subscriptionToDate) + '</b> <span class="muted">($' + n.subscriptionMonthly + '/mo)</span>' : '') +
+        ' = <b class="' + (n.netAfterFees >= 0 ? 'cyan' : 'q-warn') + '">' + fmtUsd(n.netAfterFees) + ' net</b>' +
+        (n.subscriptionMonthly > 0
+          ? '<br>Joule costs <b>' + fmtUsd(n.subscriptionMonthly) + '/mo</b> · saving you <b>' + fmtUsd(n.avgMonthlySaving) + '/mo</b> · <b class="' + (n.netMonthly >= 0 ? 'cyan' : 'q-warn') + '">net ' + (n.netMonthly >= 0 ? '+' : '') + fmtUsd(n.netMonthly) + '/mo</b>' +
+            (n.paybackMonths != null ? ' · pays for itself in <b>' + n.paybackMonths.toFixed(1) + '</b> month' + (n.paybackMonths === 1 ? '' : 's') : '')
+          : '<br><span class="muted">Set SUBSCRIPTION_COST_MONTHLY to see payback against your plan price.</span>') +
+        '<br><span class="muted">Cost is measured from real token usage; energy and carbon are estimated.</span>' +
+      '</div>' +
+
+      (r.levers.length ? '<div class="levers">' +
+        '<div class="lev-h">Where it came from</div>' + baseL.map((l) => leverRow(l, maxBase)).join('') +
+        (addL.length ? '<div class="lev-h">Separate lines <span style="text-transform:none;letter-spacing:0">— different basis, not added into the headline</span></div>' + addL.map((l) => leverRow(l, maxAdd)).join('') : '') +
+      '</div>' : '') +
+    '</div>';
+}
 
 // "Get started" panel — shown instead of a wall of zeros until onboarding is done.
 async function paintGetStarted() {

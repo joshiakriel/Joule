@@ -17,6 +17,7 @@ const batch = require("./batch");
 const reasoning = require("./reasoning");
 const upstream = require("./upstream");
 const tenancy = require("./tenancy");
+const digest = require("./digest");
 
 // Fill in reasoning-token counts + capping/downgrade savings (labelled estimates).
 function finalizeReasoning(info, tier, usage) {
@@ -826,6 +827,17 @@ app.get("/api/advisory", (req, res) => {
   res.json(cacheadvice.advisory(store.all(req.tenant.id)));
 });
 
+// Weekly value digest for THIS tenant — the same payload the email uses, so the in-app
+// summary and the email can never disagree. ?days=N to change the window; ?send=1 to
+// deliver it (no-ops cleanly, and reports why, when no email provider is configured).
+app.get("/api/digest", async (req, res) => {
+  const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 7));
+  const d = digest.build(req.tenant.id, { days });
+  let delivery = { sent: false, reason: "not requested" };
+  if (req.query.send === "1") delivery = await digest.send(d, req.tenant.email || req.query.to || null);
+  res.json({ ...d, text: digest.toText(d), delivery });
+});
+
 // Budget definitions + live spend/remaining + terminated sessions + recent events.
 app.get("/api/budgets", (req, res) => {
   res.json({ ...budget.stats(req.tenant.id), definitions: budget.budgets(req.tenant.id) });
@@ -843,24 +855,77 @@ app.get("/api/roi", (req, res) => {
   const startDate = rollups[0].date, endDate = rollups[rollups.length - 1].date;
   const days = Math.max(1, Math.round((new Date(endDate + "T00:00:00Z") - new Date(startDate + "T00:00:00Z")) / 86400000) + 1);
   const months = days / 30.4375;
-  let cCost = 0, cCarbon = 0, cVerify = 0;
-  const series = rollups.map((r) => {
-    cCost += r.cost.saved; cCarbon += r.carbonG.saved; cVerify += r.verifyCost.costUsd;
-    return { date: r.date, savedCost: r.cost.saved, savedCarbonG: r.carbonG.saved, cumSavedCost: cCost, cumSavedCarbonG: cCarbon, cumVerifyCost: cVerify };
-  });
   const grossSaved = totals.cost.saved, verifyCost = totals.verifyCost.costUsd;
   const subscriptionToDate = subMonthly * months;
+  // Daily subscription accrual so the NET line on the chart is honest day by day, not
+  // just at the endpoint (gross compounds, fees accrue — both must be visible).
+  const subPerDay = subMonthly > 0 ? (subMonthly * 12) / 365.25 : 0;
+  let cCost = 0, cCarbon = 0, cVerify = 0;
+  const series = rollups.map((r, i) => {
+    cCost += r.cost.saved; cCarbon += r.carbonG.saved; cVerify += r.verifyCost.costUsd;
+    return {
+      date: r.date, savedCost: r.cost.saved, savedCarbonG: r.carbonG.saved,
+      cumSavedCost: cCost, cumSavedCarbonG: cCarbon, cumVerifyCost: cVerify,
+      // net-of-fees to date: what they'd actually be up by on this day
+      cumNet: cCost - cVerify - subPerDay * (i + 1)
+    };
+  });
   const monthlyNetBeforeSub = (grossSaved - verifyCost) / months;
+
+  // WHERE the saving came from. Each lever carries its own quality-risk label AND its
+  // BASIS, because these are not slices of one pie:
+  //   basis "baseline"   — measured against the always-large baseline; these SUM to
+  //                        `cost.saved` (the headline gross figure).
+  //   basis "additional" — separate savings lines on a different basis (a discount on
+  //                        actual spend, or an estimate). Reported separately and NEVER
+  //                        added into the headline, or we'd be double-counting.
+  const mkLevers = (rows) => rows.filter((l) => Math.abs(l.savedUsd) > 1e-12).sort((a, b) => b.savedUsd - a.savedUsd);
+  const baselineLevers = mkLevers([
+    { id: "cache", label: "Exact cache", basis: "baseline", savedUsd: totals.cacheSavedUsd, risk: "none", note: "Model recomputes nothing — the output is byte-identical." },
+    { id: "routing", label: "Model routing", basis: "baseline", savedUsd: totals.routingSavedUsd, risk: "verified", note: "A quality-risk decision, bounded by the conformal gate and verified on a sample." },
+    { id: "semantic", label: "Semantic cache", basis: "baseline", savedUsd: totals.semantic.savedUsd, risk: "quality-risk", note: "Can return a similar question's answer — read WITH the realised error rate." }
+  ]);
+  const additionalLevers = mkLevers([
+    { id: "prefixCache", label: "Provider prefix cache", basis: "additional", savedUsd: totals.prefixCache.netSavedUsd || 0, risk: "none", note: "Net of the cache-write premium, from the provider's own reported usage." },
+    { id: "batch", label: "Batch discount", basis: "additional", savedUsd: totals.batch.savedUsd, risk: "none", note: "Same model, same output — a discount on actual spend for async work." },
+    { id: "reasoning", label: "Reasoning-budget control", basis: "additional", savedUsd: totals.reasoning.savedUsd, risk: "estimated", note: "Estimated — we don't run the uncapped variant to compare against." },
+    { id: "semanticEmbedCost", label: "…less semantic embedding cost", basis: "additional", savedUsd: -(totals.semantic.embedCostUsd || 0), risk: "none", note: "The embedding spend that semantic-cache savings are reported net of." }
+  ]);
+  const levers = baselineLevers.concat(additionalLevers);
+
+  // HONESTY: savings are never shown without the quality that was held while making them.
+  const minSamples = config.verify.minCalibrationN;
+  const quality = {
+    score: totals.qualityScore,                       // null until >=1 verified sample
+    verified: totals.verified,
+    requests: totals.requests,
+    sufficient: totals.verified >= minSamples,        // below this we refuse to state a guarantee
+    minSamples,
+    guaranteeReady: verify.qualityStats(tenant).guaranteeReady
+  };
+
   res.json({
     empty: false, startDate, endDate, days,
     lifetime: { requests: totals.requests, savedCost: grossSaved, savedCarbonG: totals.carbonG.saved, savedEnergyWh: totals.energyWh.saved, verifyCost, avgQuality: totals.qualityScore },
+    quality,
+    levers,
+    // the baseline levers reconcile exactly to the headline gross figure; the additional
+    // ones are reported on their own line so nothing is ever double-counted into it.
+    leverTotals: {
+      baselineSavedUsd: baselineLevers.reduce((s, l) => s + l.savedUsd, 0),
+      additionalSavedUsd: additionalLevers.reduce((s, l) => s + l.savedUsd, 0)
+    },
     series,
     net: {
       grossSaved, verifyCost, subscriptionMonthly: subMonthly, subscriptionToDate,
       netAfterFees: grossSaved - verifyCost - subscriptionToDate,
       avgMonthlySaving: grossSaved / months,
-      paybackMonths: (subMonthly > 0 && monthlyNetBeforeSub > 0) ? subMonthly / monthlyNetBeforeSub : null
-    }
+      netMonthly: (grossSaved - verifyCost - subscriptionToDate) / months,
+      paybackMonths: (subMonthly > 0 && monthlyNetBeforeSub > 0) ? subMonthly / monthlyNetBeforeSub : null,
+      worthIt: subMonthly > 0 ? (grossSaved - verifyCost) > subscriptionToDate : null
+    },
+    // energy/carbon are MODELLED from token counts, not metered from hardware.
+    methodology: { cost: "measured", energy: "estimated", carbon: "estimated" }
   });
 });
 

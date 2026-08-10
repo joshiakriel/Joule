@@ -244,6 +244,70 @@ database (it truncates `records`) and opt in explicitly:
 STORE_PG_TEST=1 DATABASE_URL=postgresql://…  npm test
 ```
 
+## Dashboard structure
+
+Three areas behind real navigation, so a customer sees outcomes and the machinery stays out
+of the way.
+
+| Area | What's there | Why |
+|---|---|---|
+| **Home** | The savings hero (net $ saved, paired with quality held, "since &lt;date&gt;"), the savings-over-time chart, and a compact **this week** summary | The only question that matters on open: *what has this saved me, and did quality hold?* Nothing competes with it |
+| **Activity** | Request log, per-model & per-tier breakdown, sessions, activity chart, cache & advisory, budget — plus the **"Try a prompt"** console as a small utility | Detail for people who want it, one click away |
+| **Settings** | Provider key, models, grid region, dry-run, Joule API keys, integration snippet, and a **danger zone** for deleting your data | Operator/config controls and destructive actions never sit on the customer's home view |
+
+Navigation is hash-routed (`#home` / `#activity` / `#settings`) so browser back/forward work,
+the active item is announced via `aria-current`, and the whole thing is responsive.
+
+**Progressive disclosure:** with no data yet, Home collapses to **one** empty state with a
+single call to action — never six stacked "No … yet" boxes, and never fabricated numbers.
+Finishing onboarding hands off directly into Home, where the user's first real result is the
+hero.
+
+## The value surface — what you've saved, stated plainly
+
+The top of the dashboard answers "is this worth it?" without any mental math. Everything is
+real, tenant-scoped, and reconciles with `/api/report`.
+
+**The headline** — *"Since 3 Feb 2026 · 41 days · 8,214 requests optimised"*
+- **Net saved** (the big number) — **after** Joule's own cost. Gross is shown beside it, never
+  in its place.
+- **Quality held**, immediately next to it. Savings are never displayed without the quality
+  that was held while making them; with too few verified samples it says
+  *"below N — not yet a guarantee"*, and with none it says *"not yet verified"*.
+- CO₂ avoided and energy saved, both labelled **est**.
+
+**The chart** (hand-rolled SVG, no chart library): cumulative **gross** savings compounding
+since day one, plus a dashed **net-of-fees** line so the honest picture is always on screen.
+
+**Where it came from** — a per-lever breakdown, each tagged with its quality risk
+(`none` / `verified` / `estimated` / `quality-risk`):
+- **Baseline levers** (exact cache, routing, semantic cache) sum **exactly** to the headline
+  gross figure — a test enforces this, so the breakdown can't drift or double-count.
+- **Separate lines** (provider prefix cache, batch discount, reasoning control) are on a
+  *different basis* — a discount on actual spend, or an estimate — so they're reported apart
+  and never folded into the headline.
+
+**Payback** — with `SUBSCRIPTION_COST_MONTHLY` set: *"Joule costs $49/mo · saving you $310/mo ·
+net +$261/mo · pays for itself in 0.2 months."* Without a plan price we show nothing rather
+than invent a payback.
+
+### Weekly digest
+
+A per-tenant weekly summary — net saved, quality held, top cost-driving models and agents, and
+one advisory finding — so the value stays visible between logins.
+
+```bash
+GET /api/digest            # in-app summary (JSON + ready-to-send text), tenant-scoped
+GET /api/digest?days=30    # any window
+GET /api/digest?send=1     # also deliver by email
+```
+
+Email is optional and provider-agnostic (`DIGEST_API_KEY`, `DIGEST_API_URL` — Resend by
+default, any compatible JSON endpoint works). **With nothing configured, sending no-ops
+cleanly and reports why** — it never throws and nothing on the serving path depends on it. A
+quiet week says *"no requests went through Joule this week, so there's nothing to report"*
+rather than emailing zeros dressed up as a result.
+
 ## Self-serve onboarding — signup to first metered request
 
 A new user activates without talking to us. The dashboard walks them through three steps and
