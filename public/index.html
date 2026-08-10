@@ -637,42 +637,64 @@ a:hover{color:var(--cyan)}
     <div id="modelBox"><div class="empty-log">No requests yet.</div></div>
   </div>
 
-  <div class="card" id="cfgCard" data-view="settings" style="margin-top:18px">
-    <h2>Workspace configuration</h2>
-    <p class="cfg-lead">Set the provider key, models and grid region for this workspace. Values are held <b>in memory only</b> — never written to disk and never returned by the API.</p>
+  <!-- PER-WORKSPACE: the customer's own provider connection (encrypted, validated) -->
+  <div class="card" data-view="settings" id="provCard">
+    <h2>Provider connection</h2>
+    <p class="cfg-lead">The model provider Joule calls on your behalf. Your key is verified with your provider, then stored <b>encrypted</b> — it is never written to logs and never sent back to your browser.</p>
+    <div id="provState"></div>
+    <div class="tabs" style="margin:14px 0 10px">
+      <button class="tab" data-preset="openai">OpenAI</button>
+      <button class="tab" data-preset="anthropic">Anthropic</button>
+      <button class="tab" data-preset="groq">Groq</button>
+    </div>
     <div class="cfg-grid">
-      <label class="cfg-f">
-        <span class="cfg-lbl">Provider API key <em class="src" id="src-upstreamApiKey"></em></span>
-        <input type="password" id="cfg-upstreamApiKey" autocomplete="off" placeholder="sk-…">
-      </label>
-      <label class="cfg-f">
-        <span class="cfg-lbl">Base URL <em class="src" id="src-upstreamBaseUrl"></em></span>
-        <input type="text" id="cfg-upstreamBaseUrl" placeholder="https://api.openai.com/v1">
-      </label>
-      <label class="cfg-f">
-        <span class="cfg-lbl">Model · small <em class="src" id="src-modelSmall"></em></span>
-        <input type="text" id="cfg-modelSmall" placeholder="gpt-4o-mini">
-      </label>
-      <label class="cfg-f">
-        <span class="cfg-lbl">Model · large <em class="src" id="src-modelLarge"></em></span>
-        <input type="text" id="cfg-modelLarge" placeholder="gpt-4o">
-      </label>
-      <label class="cfg-f">
-        <span class="cfg-lbl">Electricity Maps token <em class="src" id="src-emToken"></em></span>
-        <input type="password" id="cfg-emToken" autocomplete="off" placeholder="optional — live grid carbon">
-      </label>
-      <label class="cfg-f">
-        <span class="cfg-lbl">Grid region <em class="src" id="src-gridZone"></em></span>
-        <select id="cfg-gridZone"></select>
-      </label>
+      <label class="cfg-f"><span class="cfg-lbl">Provider API key</span><input type="password" id="pcKey" autocomplete="off" placeholder="sk-…"></label>
+      <label class="cfg-f"><span class="cfg-lbl">Provider base URL</span><input type="text" id="pcBase" placeholder="https://api.openai.com/v1"></label>
     </div>
-    <div class="cfg-toggles">
-      <label class="tog"><input type="checkbox" id="cfg-routingEnabled"><span>Routing <em class="src" id="src-routingEnabled"></em></span></label>
-      <label class="tog"><input type="checkbox" id="cfg-dryRun"><span>Dry-run mode <em class="src" id="src-dryRun"></em></span></label>
-    </div>
-    <div class="run">
-      <button id="cfg-save">Save configuration</button>
-      <span id="cfg-msg" class="reason"></span>
+    <div class="gate-msg" id="pcMsg"></div>
+    <div class="run"><button id="pcSave">Verify &amp; save key</button></div>
+  </div>
+
+  <!-- DEPLOYMENT-WIDE: read-only for tenants; editable only by an operator -->
+  <div class="card" data-view="settings" id="cfgCard" style="margin-top:18px">
+    <h2>Instance settings</h2>
+    <p class="cfg-lead" id="cfgLead"></p>
+    <div id="cfgReadonly" style="display:none"></div>
+    <div id="cfgEditable" style="display:none">
+      <div class="cfg-grid">
+        <label class="cfg-f">
+          <span class="cfg-lbl">Model · small <em class="src" id="src-modelSmall"></em></span>
+          <input type="text" id="cfg-modelSmall">
+        </label>
+        <label class="cfg-f">
+          <span class="cfg-lbl">Model · large <em class="src" id="src-modelLarge"></em></span>
+          <input type="text" id="cfg-modelLarge">
+        </label>
+        <label class="cfg-f">
+          <span class="cfg-lbl">Default provider base URL <em class="src" id="src-upstreamBaseUrl"></em></span>
+          <input type="text" id="cfg-upstreamBaseUrl">
+        </label>
+        <label class="cfg-f">
+          <span class="cfg-lbl">Fallback provider key <em class="src" id="src-upstreamApiKey"></em></span>
+          <input type="password" id="cfg-upstreamApiKey" autocomplete="off" placeholder="sk-…">
+        </label>
+        <label class="cfg-f">
+          <span class="cfg-lbl">Electricity Maps token <em class="src" id="src-emToken"></em></span>
+          <input type="password" id="cfg-emToken" autocomplete="off" placeholder="optional — live grid carbon">
+        </label>
+        <label class="cfg-f">
+          <span class="cfg-lbl">Grid region <em class="src" id="src-gridZone"></em></span>
+          <select id="cfg-gridZone"></select>
+        </label>
+      </div>
+      <div class="cfg-toggles">
+        <label class="tog"><input type="checkbox" id="cfg-routingEnabled"><span>Routing <em class="src" id="src-routingEnabled"></em></span></label>
+        <label class="tog"><input type="checkbox" id="cfg-dryRun"><span>Dry-run mode <em class="src" id="src-dryRun"></em></span></label>
+      </div>
+      <div class="run">
+        <button id="cfg-save">Save instance settings</button>
+        <span id="cfg-msg" class="reason"></span>
+      </div>
     </div>
   </div>
 
@@ -811,19 +833,8 @@ function closeWizard() { stopPolling(); gel("wizGate").style.display = "none"; }
 
 // STEP 1 — verify + store the provider key
 gel("provSave").onclick = async () => {
-  const apiKey = gel("provKey").value.trim();
-  if (!apiKey) return showMsg("provMsg", "Paste your provider API key first.");
-  const btn = gel("provSave"); btn.disabled = true; btn.textContent = "Verifying with your provider…"; hideMsg("provMsg");
-  try {
-    const r = await fetch("/api/provider-key", { method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ apiKey, baseUrl: gel("provBase").value.trim() || undefined }) });
-    const d = await r.json();
-    if (!r.ok || !d.valid) return showMsg("provMsg", d.message || "That key was rejected.");
-    showMsg("provMsg", "✓ " + d.message + " Stored encrypted — it never leaves the server.", "ok");
-    gel("provKey").value = "";
-    setTimeout(() => { hideMsg("provMsg"); showStep(2); }, 900);
-  } catch { showMsg("provMsg", "Could not reach Joule. Check your connection and try again."); }
-  finally { btn.disabled = false; btn.textContent = "Verify & save key"; }
+  const ok = await saveProviderKey({ apiKey: gel("provKey").value.trim(), baseUrl: gel("provBase").value.trim(), msgEl: "provMsg", btn: gel("provSave") });
+  if (ok) { gel("provKey").value = ""; setTimeout(() => { hideMsg("provMsg"); showStep(2); }, 900); }
 };
 gel("provSkip").onclick = () => showStep(2);
 
@@ -1332,9 +1343,17 @@ ZONES.forEach(z => { const o=document.createElement("option"); o.value=z; o.text
 const srcLabel = (s) => s==="runtime" ? "· set here" : s==="env" ? "· from environment" : "· default";
 let loadedCfg = {};
 
+function sessionExpired() {
+  const b = gel("banner");
+  if (b) { b.className = "banner warn"; b.style.display = "block";
+    b.textContent = "Your session expired, or this deployment can't verify your sign-in. Sign in again — if it keeps happening, the operator needs to check SUPABASE_JWT_SECRET."; }
+}
+
 async function loadConfig() {
-  let c; try { c = await (await fetch("/api/config")).json(); } catch { return; }
-  if (!c || typeof c !== "object" || !("upstreamBaseUrl" in c)) return; // 401/error/null body — leave the form untouched
+  let c, st = 0;
+  try { const r = await fetch("/api/config"); st = r.status; c = await r.json(); } catch { return; }
+  if (st === 401) { sessionExpired(); return; }                 // token rejected — tell the user
+  if (!c || typeof c !== "object" || !("upstreamBaseUrl" in c)) return;
   loadedCfg = c;
   $("archProv").textContent = providerHost(c.upstreamBaseUrl);
   $("cfg-upstreamBaseUrl").value = c.upstreamBaseUrl || "";
@@ -1408,11 +1427,98 @@ function showView(v) {
   if (h && v === "home") { h.textContent = VIEW_COPY.home.t; sub.textContent = VIEW_COPY.home.s; }
   // the heading block itself belongs to whichever view is active
   if (v === "overview") { paintValue(); paintWeek(); }
-  if (v === "settings") { paintStatus(); paintKeys(); paintPlan(); }
+  if (v === "settings") { paintProviderState(); paintInstanceSettings(); paintStatus(); paintKeys(); paintPlan(); }
   if (v === "reports") paintDocs();
   window.scrollTo({ top: 0, behavior: "instant" in window ? "instant" : "auto" });
 }
 window.addEventListener("hashchange", () => showView((location.hash || "#overview").slice(1)));
+
+/* ---------- Settings: per-workspace vs deployment-wide ----------
+   PER-WORKSPACE — the provider connection. Uses the SAME validate-then-save flow as
+   onboarding step 1 (saveProviderKey is shared by both), so a bad key is caught here
+   rather than in production. The stored key is never returned by any endpoint.
+   DEPLOYMENT-WIDE — instance settings. A normal tenant sees these READ-ONLY; only an
+   operator is offered the editable form, so nobody is shown a save that must 403. */
+const PRESETS = {
+  openai:    { label: "OpenAI",    baseUrl: "https://api.openai.com/v1" },
+  anthropic: { label: "Anthropic", baseUrl: "https://api.anthropic.com/v1" },
+  groq:      { label: "Groq",      baseUrl: "https://api.groq.com/openai/v1" }
+};
+function providerLabel(url) {
+  const u = String(url || "");
+  for (const k of Object.keys(PRESETS)) {
+    try { if (u.indexOf(new URL(PRESETS[k].baseUrl).host) >= 0) return PRESETS[k].label; } catch (e) {}
+  }
+  try { return new URL(u).host; } catch (e) { return "your provider"; }
+}
+
+// Shared by onboarding step 1 AND the Settings card — one implementation, one behaviour.
+async function saveProviderKey(opts) {
+  const msgEl = opts.msgEl, btn = opts.btn;
+  if (!opts.apiKey) { showMsg(msgEl, "Paste your provider API key first."); return false; }
+  const label = btn ? btn.textContent : null;
+  if (btn) { btn.disabled = true; btn.textContent = "Verifying with your provider\u2026"; }
+  hideMsg(msgEl);
+  try {
+    const r = await fetch("/api/provider-key", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ apiKey: opts.apiKey, baseUrl: opts.baseUrl || undefined })
+    });
+    const d = await r.json();
+    if (r.status === 401) { showMsg(msgEl, "Your session expired. Sign in again to continue."); return false; }
+    if (!r.ok || !d.valid) { showMsg(msgEl, d.message || "That key was rejected."); return false; } // the provider's own words
+    showMsg(msgEl, "\u2713 " + d.message + " " + (opts.okLabel || "Stored encrypted \u2014 it never leaves the server."), "ok");
+    return true;
+  } catch (e) { showMsg(msgEl, "Could not reach Joule. Check your connection and try again."); return false; }
+  finally { if (btn) { btn.disabled = false; btn.textContent = label; } }
+}
+
+function paintProviderState() {
+  const box = gel("provState"); if (!box) return;
+  const p = ME && ME.provider;
+  box.innerHTML = (p && p.connected)
+    ? '<div class="quiet" style="border-color:rgba(51,227,199,.3)"><b style="color:var(--cyan)">\u2713 Connected to ' + esc(providerLabel(p.baseUrl)) + '</b><br>' +
+      '<span class="muted">Key ending \u2022\u2022\u2022\u2022' + esc(p.last4) + ' \u00b7 stored encrypted. Enter a new key below to replace it.</span></div>'
+    : '<div class="quiet">No provider key set for this workspace. Add one below to start routing your traffic.</div>';
+}
+
+document.querySelectorAll("[data-preset]").forEach(function (b) {
+  b.onclick = function () {
+    document.querySelectorAll("[data-preset]").forEach(function (x) { x.classList.remove("on"); });
+    b.classList.add("on");
+    gel("pcBase").value = PRESETS[b.dataset.preset].baseUrl;   // prefill the endpoint
+  };
+});
+var pcSaveBtn = gel("pcSave");
+if (pcSaveBtn) pcSaveBtn.onclick = async function () {
+  const ok = await saveProviderKey({ apiKey: gel("pcKey").value.trim(), baseUrl: gel("pcBase").value.trim(), msgEl: "pcMsg", btn: pcSaveBtn });
+  if (ok) {
+    gel("pcKey").value = "";
+    try { ME = await (await fetch("/api/me")).json(); } catch (e) {}
+    paintProviderState();
+  }
+};
+
+// Instance settings: editable ONLY for an operator; everyone else gets a read-only view.
+function paintInstanceSettings() {
+  const ro = gel("cfgReadonly"), ed = gel("cfgEditable"), lead = gel("cfgLead");
+  if (!ro || !ed) return;
+  const op = Boolean(ME && ME.isOperator);
+  if (op) {
+    ed.style.display = "block"; ro.style.display = "none";
+    lead.textContent = "Deployment-wide settings for this Joule instance. You're an operator, so you can change these \u2014 they affect every workspace.";
+    return;
+  }
+  ed.style.display = "none"; ro.style.display = "block";
+  lead.textContent = "How this deployment is configured. These are set by the operator and apply to every workspace \u2014 your own provider key is above.";
+  const c = loadedCfg;
+  if (!c) { ro.innerHTML = '<div class="empty-log">Unavailable.</div>'; return; }
+  const row = (l, v) => '<div class="kpi" style="box-shadow:none"><div class="kpi-l">' + l + '</div><div class="kpi-n" style="font-size:15px">' + esc(v) + '</div></div>';
+  ro.innerHTML = '<div class="kpis">' +
+    row("Model \u00b7 small", c.modelSmall || "\u2014") + row("Model \u00b7 large", c.modelLarge || "\u2014") +
+    row("Grid region", c.gridZone || "\u2014") + row("Routing", c.routingEnabled ? "On" : "Off") +
+  '</div>';
+}
 
 /* ---------- Phase 2.2: the trust surface ----------
    Reliability evidence, account controls and the honesty docs. Every figure here is REAL:

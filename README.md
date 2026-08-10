@@ -396,6 +396,40 @@ never** be set here), `SUPABASE_JWT_SECRET`, `JOULE_ENC_KEY`. With `AUTH_REQUIRE
 `sessionStorage` or cookies — so it can't be read by injected script or outlive the tab. The
 trade-off is deliberate: a page refresh means signing in again. Enforced by a test.
 
+## Settings: your connection vs. the deployment
+
+Two genuinely different things, so they're two separate surfaces. Nothing in the UI ever
+offers a save that can't succeed.
+
+| | **Provider connection** (per workspace) | **Instance settings** (deployment-wide) |
+|---|---|---|
+| What | Your provider API key + base URL | Models, grid region, routing, dry-run |
+| Who | **Every tenant** manages their own | **Operators only** — tenants see it read-only |
+| API | `POST /api/provider-key` | `POST /api/config` |
+| Storage | AES-256-GCM encrypted per tenant, **write-only** — no endpoint ever returns it | Process config from env |
+
+**Provider connection** has quick-picks for OpenAI / Anthropic / **Groq** (`https://api.groq.com/openai/v1`)
+that prefill the base URL, validates your key against the provider before saving (so a typo
+fails here, not in production), and then shows *"✓ Connected to Groq · key ending ••••1234"*.
+It uses the **same** validate-then-save flow as onboarding step 1 — one implementation.
+
+**Operators** are set with `OPERATOR_EMAILS` (comma-separated allowlist) or a `role: "operator"`
+claim on the JWT. With `AUTH_REQUIRED=false` (dev/DRY_RUN) the local user is the operator, so
+the single-tenant workflow is unchanged.
+
+### Sign-in requirements (read this if the dashboard won't load)
+
+`SUPABASE_JWT_SECRET` **must be set on the server and must match your Supabase project.** If it's
+missing or wrong, every `/api/*` call returns `401 authentication required` — you'll be able to
+sign in (that's Supabase's own endpoint) but nothing in the dashboard will load. The UI now says
+so explicitly instead of showing a blank panel.
+
+⚠️ **HS256 only.** Joule verifies tokens with the shared JWT secret (HMAC-SHA256). Newer Supabase
+projects issue **asymmetric** (ES256/RS256) tokens signed by rotating JWKS keys — those will be
+rejected by this verifier and need a JWKS-based verifier instead. Check **Project Settings → API →
+JWT Keys**: if you see a legacy shared "JWT Secret" in use you're fine; if the project is on
+asymmetric signing keys, HS256 verification won't work.
+
 ## Multi-tenancy, auth & data isolation
 
 Joule is multi-tenant: **every stored row, cache key, budget, calibration set and metric query

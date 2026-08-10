@@ -102,7 +102,16 @@ const config = {
     // they come from env, not hardcoded HTML. The anon key is DESIGNED to be public (it grants
     // nothing without a valid session). The SERVICE-ROLE key must never appear client-side.
     supabaseUrl: process.env.SUPABASE_URL || "",
-    supabaseAnonKey: process.env.SUPABASE_ANON_KEY || ""
+    supabaseAnonKey: process.env.SUPABASE_ANON_KEY || "",
+    /**
+     * OPERATORS — the people who run this deployment. Only they may edit
+     * deployment-wide settings (models, grid region, routing, dry-run) via /api/config.
+     * Normal tenants get a READ-ONLY view of those and manage only their own
+     * per-workspace provider connection. Comma-separated email allowlist; a `role:
+     * "operator"` claim on the JWT also works. Empty list + auth off (dev/DRY_RUN)
+     * means the single local user is treated as the operator.
+     */
+    operatorEmails: String(process.env.OPERATOR_EMAILS || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)
   },
 
   /**

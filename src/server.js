@@ -122,13 +122,24 @@ function proxyAuth(req, res, next) {
   if (!config.auth.required) { req.tenant = tenancy.defaultTenant(); return next(); }
   return res.status(401).json({ error: { message: "missing or invalid Joule API key", type: "invalid_request_error", code: "unauthenticated" } });
 }
+// Is this identity an OPERATOR of the deployment (may edit instance-wide settings)?
+// Email allowlist or a role claim. With auth off (dev/DRY_RUN) the single local user is
+// the operator, so the existing single-tenant workflow keeps working.
+function isOperator(ident) {
+  if (!config.auth.required) return true;
+  if (!ident) return false;
+  if (ident.role === "operator" || ident.role === "admin") return true;
+  const email = String(ident.email || "").toLowerCase();
+  return Boolean(email && config.auth.operatorEmails.includes(email));
+}
+
 function dashAuth(req, res, next) {
   // Public by design: liveness, and the browser bootstrap values the login screen needs
   // before anyone is signed in (Supabase URL + ANON key — never the service-role key).
   if (req.path === "/health" || req.path === "/auth-config") return next();
   const t = tenancy.resolveFromJwt(req.get("authorization"));
-  if (t) { req.tenant = t; return next(); }
-  if (!config.auth.required) { req.tenant = tenancy.defaultTenant(); return next(); }
+  if (t) { req.tenant = t; req.isOperator = isOperator(t); return next(); }
+  if (!config.auth.required) { req.tenant = tenancy.defaultTenant(); req.isOperator = true; return next(); }
   return res.status(401).json({ error: { message: "authentication required", type: "invalid_request_error", code: "unauthenticated" } });
 }
 app.use("/v1", proxyAuth);
@@ -700,6 +711,14 @@ app.get("/api/me", (req, res) => {
     user: { id: req.tenant.userId || null, email: req.tenant.email || null },
     endpoint: `${req.protocol}://${req.get("host")}/v1`,   // exact baseURL for their SDK
     authRequired: config.auth.required,
+    // drives the Settings split: operators get the editable instance form, tenants a read-only view
+    isOperator: Boolean(req.isOperator),
+    // per-workspace provider connection state. The KEY ITSELF IS NEVER RETURNED — only
+    // whether one is set, its last 4, and which endpoint it points at.
+    provider: (() => {
+      const k = tenancy.getUpstreamKey(tenantId);
+      return { connected: Boolean(k), last4: k ? k.slice(-4) : null, baseUrl: config.upstreamBaseUrl };
+    })(),
     onboarding: onboardingState(tenantId),
     keys: tenancy.listKeys(tenantId)
   });
@@ -1025,13 +1044,14 @@ app.post("/api/config", (req, res) => {
   const keys = Object.keys(body);
   const unknown = keys.filter((k) => !CONFIG_FIELDS[k]);
   if (unknown.length) return res.status(400).json({ error: { message: "unknown field(s): " + unknown.join(", ") } });
-  // MULTI-TENANT SAFETY: these are PROCESS-GLOBAL settings. In a multi-tenant deployment
-  // one tenant must never rewrite them for everyone — provider keys are per-tenant and go
-  // through /api/provider-key instead. (Single-tenant/dev keeps the old behaviour.)
-  if (config.auth.required) {
+  // MULTI-TENANT SAFETY: these are PROCESS-GLOBAL settings. A normal tenant must never
+  // rewrite them for everyone — their provider key is per-workspace and goes through
+  // /api/provider-key instead. OPERATORS of the deployment may edit them; the UI only
+  // offers this form to operators, so no tenant is ever shown a save that must 403.
+  if (config.auth.required && !req.isOperator) {
     const globalOnly = keys.filter((k) => ["upstreamApiKey", "emToken", "dryRun", "routingEnabled", "modelSmall", "modelLarge", "upstreamBaseUrl", "gridZone"].includes(k));
     if (globalOnly.length) {
-      return res.status(403).json({ error: { message: "These are deployment-wide settings and can't be changed per workspace. Set your own provider key with POST /api/provider-key.", type: "invalid_request_error", code: "global_config_forbidden" } });
+      return res.status(403).json({ error: { message: "These are deployment-wide settings and can only be changed by an operator of this deployment. Your own provider key is set under Provider connection.", type: "invalid_request_error", code: "global_config_forbidden" } });
     }
   }
 

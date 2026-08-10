@@ -90,7 +90,10 @@ function resolveFromJwt(authHeader) {
   const tenantId = (payload.app_metadata && payload.app_metadata.tenant_id) || payload.tenant_id || usersById.get(payload.sub);
   if (!tenantId) return null;
   ensureTenant(tenantId, tenantId);
-  return { id: tenantId, userId: payload.sub || null, email: payload.email || null };
+  // `role` is carried through so the server can recognise an operator from a role claim
+  // (Supabase projects commonly put it at the top level or under app_metadata).
+  const role = payload.role || (payload.app_metadata && payload.app_metadata.role) || null;
+  return { id: tenantId, userId: payload.sub || null, email: payload.email || null, role };
 }
 
 // ---- per-tenant upstream key encryption (AES-256-GCM) ----

@@ -30,7 +30,8 @@ test("the dashboard has real navigation with three distinct areas", () => {
 
 test("operator/config controls live in SETTINGS, never on the customer home", () => {
   // the config panel and every credential/instance control must be behind Settings
-  assert.match(html, /id="cfgCard" data-view="settings"/, "instance configuration is in Settings");
+  // (attribute order is irrelevant — assert both are present on the same element)
+  assert.match(html, /<div class="card" data-view="settings" id="cfgCard"|id="cfgCard"[^>]*data-view="settings"/, "instance configuration is in Settings");
   // find which view each sensitive control sits under by slicing to its enclosing panel
   const sensitive = ["cfg-upstreamApiKey", "cfg-upstreamBaseUrl", "cfg-modelSmall", "cfg-gridZone", "cfg-dryRun", "cfg-save"];
   const cfgStart = html.indexOf('id="cfgCard"');
