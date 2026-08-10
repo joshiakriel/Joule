@@ -18,7 +18,7 @@ function panelsFor(view) {
 
 test("the dashboard has real navigation with three distinct areas", () => {
   assert.doesNotThrow(() => new Function(js), "dashboard JS parses");
-  for (const v of ["home", "activity", "settings"]) {
+  for (const v of ["overview", "activity", "reports", "settings"]) {
     assert.match(html, new RegExp(`data-nav="${v}"`), `nav link for ${v}`);
     assert.ok(panelsFor(v) > 0, `at least one panel routed to ${v}`);
   }
@@ -45,16 +45,21 @@ test("operator/config controls live in SETTINGS, never on the customer home", ()
   assert.match(html, /data-view="settings"[\s\S]{0,400}id="clearBtn"/, "destructive delete lives in a Settings danger zone");
 });
 
-test("HOME speaks in outcomes — no engineer jargon on the front door", () => {
-  // slice the markup that belongs to HOME (nav through the end of the home zero state)
-  const homeStart = html.indexOf('id="homeHead"');
-  const homeEnd = html.indexOf('id="homeZero"');
-  const home = html.slice(homeStart, homeEnd);
-  for (const j of ["baseURL", "dry-run", "README", "classify", "OpenAI SDK", "proxy"]) {
-    assert.ok(!home.includes(j), `HOME must not say "${j}"`);
+test("OVERVIEW speaks in outcomes — no engineer jargon on the front door", () => {
+  // the Overview markup: from its first panel to the end of its empty state
+  const start = html.indexOf('data-view="overview"');
+  const end = html.indexOf('id="homeZero"');
+  const overview = html.slice(start, end);
+  for (const j of ["baseURL", "dry-run", "README", "classify", "OpenAI SDK", "proxy", "demo"]) {
+    assert.ok(!overview.includes(j), `Overview must not say "${j}"`);
   }
-  assert.match(home, /Your savings/, "HOME leads with the outcome");
-  assert.ok(!/live console/.test(html), "the 'live console' framing is gone from the header");
+  // and the words the customer DOES see are outcome language
+  assert.match(js, /saved, net of what Joule costs you/, "the hero states the outcome plainly");
+  assert.match(js, /quality held/, "paired with quality");
+  assert.ok(!/live console/.test(html), "the 'live console' framing is gone");
+  // the banned admin copy is gone from the whole page
+  assert.ok(!/Single-tenant demo convenience/.test(html), "the demo/README admin line is deleted");
+  assert.ok(!/see the README/i.test(html), "no README references in the UI");
 });
 
 test("progressive disclosure: one empty state with a single CTA, not stacked 'No … yet' boxes", () => {
@@ -77,10 +82,29 @@ test("honesty rules survive the redesign", () => {
 
 test("the test console is a utility inside Activity, not the front door", () => {
   assert.match(html, /class="grid" data-view="activity"/, "the prompt console is routed to Activity");
-  const homeStart = html.indexOf('id="homeHead"'), homeEnd = html.indexOf('id="homeZero"');
+  const homeStart = html.indexOf('data-view="overview"'), homeEnd = html.indexOf('id="homeZero"');
   assert.ok(!html.slice(homeStart, homeEnd).includes('id="q"'), "the prompt box is not on HOME");
 });
 
-test("onboarding still hands off into HOME", () => {
-  assert.match(js, /toDash[\s\S]{0,160}showView\("home"\)/, "finishing setup lands the user on HOME");
+test("onboarding still hands off into the Overview", () => {
+  assert.match(js, /toDash[\s\S]{0,200}showView\("overview"\)/, "finishing setup lands the user on Overview");
+});
+
+test("the app shell is a real sidebar + top bar, not one flat scroll", () => {
+  assert.match(html, /<aside class="side">/, "persistent sidebar");
+  assert.match(html, /class="side-logo"/, "logo top-left");
+  assert.match(html, /class="side-acct"/, "account block bottom-left");
+  assert.match(html, /class="topbar"/, "top bar");
+  assert.match(html, /id="pageTitle"/, "top bar carries the page title");
+  // Overview is exactly: hero, chart, KPIs, week, empty state — nothing else competes
+  assert.match(html, /id="heroHost" *>|id="heroHost"/, "hero band");
+  assert.match(html, /id="kpiHost"/, "KPI row");
+  assert.match(js, /class="hero-n"/, "one large hero number");
+  assert.match(js, /countUp/, "hero number counts up when data loads");
+  // design tokens per spec
+  assert.match(html, /--bg:#0B1412/, "base near-black with warmth");
+  assert.match(html, /--panel:#12211E/, "raised panel colour");
+  assert.match(html, /--cyan:#33E3C7/, "primary accent");
+  assert.match(html, /--brand-blue:#2D87AE/, "secondary accent");
+  assert.match(html, /--amber:#FFB233/, "warning accent");
 });

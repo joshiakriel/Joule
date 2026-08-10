@@ -246,22 +246,32 @@ STORE_PG_TEST=1 DATABASE_URL=postgresql://…  npm test
 
 ## Dashboard structure
 
-Three areas behind real navigation, so a customer sees outcomes and the machinery stays out
-of the way.
+A real app shell — persistent left sidebar, top bar, and a centred ~1100px content column —
+not one flat scroll.
 
 | Area | What's there | Why |
 |---|---|---|
-| **Home** | The savings hero (net $ saved, paired with quality held, "since &lt;date&gt;"), the savings-over-time chart, and a compact **this week** summary | The only question that matters on open: *what has this saved me, and did quality hold?* Nothing competes with it |
-| **Activity** | Request log, per-model & per-tier breakdown, sessions, activity chart, cache & advisory, budget — plus the **"Try a prompt"** console as a small utility | Detail for people who want it, one click away |
-| **Settings** | Provider key, models, grid region, dry-run, Joule API keys, integration snippet, and a **danger zone** for deleting your data | Operator/config controls and destructive actions never sit on the customer's home view |
+| **Overview** (default) | ONE hero band: the large **net $ saved** number with **quality held** beside it and *"since &lt;date&gt;"* under it. Then the savings-over-time chart. Then four KPI cards — spend, requests, CO₂ avoided, cache hit-rate. Nothing else. | The only question that matters on open. Nothing competes with the hero |
+| **Activity** | Request log, per-model & per-tier breakdown, sessions, cache advisory, budget — plus the **"Try it"** prompt console as a small utility | Detail, one click away |
+| **Reports** | Export (PDF / CSV / JSON) and the full methodology | The artefact you hand to finance |
+| **Settings** | Provider key, models, grid region, dry-run, Joule API keys, service status, workspace configuration, and the danger zone | **Every** operator control lives here and nowhere else |
 
-Navigation is hash-routed (`#home` / `#activity` / `#settings`) so browser back/forward work,
-the active item is announced via `aria-current`, and the whole thing is responsive.
+Navigation is hash-routed (`#overview` / `#activity` / `#reports` / `#settings`) so browser
+back/forward work, the active item is announced via `aria-current`, and the sidebar collapses
+to a top bar below 900px.
 
-**Progressive disclosure:** with no data yet, Home collapses to **one** empty state with a
-single call to action — never six stacked "No … yet" boxes, and never fabricated numbers.
-Finishing onboarding hands off directly into Home, where the user's first real result is the
-hero.
+**Design system:** near-black warm base (`#0B1412`) with raised panels (`#12211E`) and hairline
+borders. Cyan (`#33E3C7`) is reserved for the hero number, active nav and primary buttons only;
+blue (`#2D87AE`) for links; amber (`#FFB233`) only for warnings. Generous padding (24–32px) and
+vertical rhythm, 16px radii, soft shadows, a single faint cyan glow behind the hero, 150ms
+transitions, and a count-up on the hero number when data loads.
+
+**Progressive disclosure:** with no data, Overview collapses to **one** centred empty state
+("Send your first request to see your savings") and every other module is hidden entirely —
+never a wall of zero-boxes, never fabricated numbers. Onboarding hands off into Overview.
+
+**Customer views use outcome language only** — no "demo", "dry-run", "README", "baseURL" or
+proxy jargon anywhere a paying customer looks.
 
 ## The trust surface — evidence for finance, security and your own sanity
 

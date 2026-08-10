@@ -161,8 +161,8 @@ test("docs pages render the honesty content and claim NO certification we don't 
   assert.doesNotThrow(() => new Function(js), "dashboard JS parses");
 
   // a real Docs area exists and is reachable from nav
-  assert.match(html, /data-nav="docs"/, "Docs nav link");
-  assert.match(html, /data-view="docs"/, "Docs view");
+  assert.match(html, /data-nav="reports"/, "Docs nav link");
+  assert.match(html, /data-view="reports"/, "Docs view");
   assert.match(js, /function paintDocs/, "docs renderer");
 
   // the three required pages

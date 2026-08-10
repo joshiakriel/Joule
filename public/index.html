@@ -287,6 +287,154 @@ function brandFallback(img){var n=(parseInt(img.dataset.try||"0",10))+1;img.data
   .week .wk-s{font-size:11.5px;color:var(--muted);margin-top:3px}
   .quiet{color:var(--muted);font-size:13.5px;background:var(--panel,#121821);border:1px solid var(--line,#1e2733);border-radius:12px;padding:18px 20px;line-height:1.6}
   @media (max-width:560px){ .nav a{padding:9px 12px;font-size:13px} }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   APP SHELL — premium redesign. Loaded last so it wins the cascade.
+   Palette per spec: base #0B1412, panels #12211E, hairline rgba(255,255,255,.06),
+   cyan #33E3C7 used sparingly, blue #2D87AE for links, amber #FFB233 for warnings.
+   Space is the luxury signal: 24–32px card padding, generous vertical rhythm.
+   ═══════════════════════════════════════════════════════════════════════════ */
+:root{
+  --ink:#0B1412; --bg:#0B1412; --panel:#12211E; --panel2:#162825;
+  --line:rgba(255,255,255,.06); --line2:rgba(255,255,255,.10);
+  --text:#E8F2EF; --muted:#8FA39C;
+  --cyan:#33E3C7; --cyan-dim:rgba(51,227,199,.12);
+  --brand-blue:#2D87AE; --amber:#FFB233;
+  --radius:16px; --shadow:0 2px 20px rgba(0,0,0,.35);
+  --side:236px; --maxw:1100px;
+  --t:150ms cubic-bezier(.4,0,.2,1);
+}
+html,body{background:var(--bg)}
+body{
+  background:var(--bg) !important;
+  font-family:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  color:var(--text); line-height:1.6; -webkit-font-smoothing:antialiased;
+}
+/* shell layout */
+.shell{display:flex;min-height:100vh}
+.side{
+  width:var(--side);flex:0 0 var(--side);background:var(--panel);
+  border-right:1px solid var(--line);display:flex;flex-direction:column;
+  padding:26px 16px 20px;position:sticky;top:0;height:100vh;
+}
+.side-logo{display:flex;align-items:center;gap:10px;padding:0 8px 28px}
+.side-logo img{height:26px;width:auto}
+.side-logo .sl-t{font-size:16px;font-weight:650;letter-spacing:-.2px}
+.side nav{display:flex;flex-direction:column;gap:2px;flex:1}
+.side nav a{
+  display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:10px;
+  color:var(--muted);text-decoration:none;font-size:14px;font-weight:500;
+  transition:background var(--t),color var(--t);
+}
+.side nav a:hover{background:rgba(255,255,255,.04);color:var(--text)}
+.side nav a.on{background:var(--cyan-dim);color:var(--cyan);font-weight:600}
+.side nav a:focus-visible{outline:2px solid var(--cyan);outline-offset:1px}
+.side nav a svg{width:16px;height:16px;flex:0 0 16px;opacity:.9}
+.side-acct{
+  border-top:1px solid var(--line);padding:14px 10px 0;margin-top:14px;
+  display:flex;align-items:center;gap:10px;min-width:0;
+}
+.side-acct .av{
+  width:30px;height:30px;border-radius:50%;flex:0 0 30px;display:grid;place-items:center;
+  background:var(--cyan-dim);color:var(--cyan);font-size:12px;font-weight:700;
+}
+.side-acct .ai{min-width:0}
+.side-acct .an{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.side-acct .aw{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* main column */
+.main{flex:1;min-width:0;display:flex;flex-direction:column}
+.topbar{
+  display:flex;align-items:center;justify-content:space-between;gap:16px;
+  padding:20px 32px;border-bottom:1px solid var(--line);
+  position:sticky;top:0;background:rgba(11,20,18,.86);backdrop-filter:blur(10px);z-index:20;
+}
+.topbar h1{margin:0;font-size:17px;font-weight:650;letter-spacing:-.2px}
+.topbar .tb-sub{font-size:12.5px;color:var(--muted);margin-top:1px}
+.content{padding:36px 32px 72px;max-width:var(--maxw);width:100%;margin:0 auto;flex:1}
+.content > * + *{margin-top:28px}
+/* section rhythm */
+.sec-label{font-size:11px;text-transform:uppercase;letter-spacing:2px;color:var(--muted);font-weight:600;margin-bottom:14px}
+/* cards */
+.card,.val,.zero,.wk,.quiet,.gate-card{
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+  box-shadow:var(--shadow);
+}
+.card{padding:26px 28px;margin-top:0}
+.card h2{
+  font-size:12px;text-transform:uppercase;letter-spacing:2px;color:var(--muted);
+  font-weight:600;margin:0 0 16px;border:0;padding:0;
+}
+.card.lift{transition:transform var(--t),border-color var(--t)}
+.card.lift:hover{transform:translateY(-2px);border-color:var(--line2)}
+/* HERO band — the one place the accent is loud */
+.hero{
+  position:relative;overflow:hidden;padding:44px 40px;
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);
+}
+.hero::before{ /* the single tasteful gradient accent */
+  content:"";position:absolute;top:-160px;left:-80px;width:520px;height:360px;
+  background:radial-gradient(circle,rgba(51,227,199,.16),transparent 68%);pointer-events:none;
+}
+.hero-in{position:relative;display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start}
+.hero-main{min-width:260px}
+.hero-n{
+  font-size:60px;line-height:1.02;font-weight:700;letter-spacing:-2.2px;color:var(--cyan);
+  font-variant-numeric:tabular-nums;
+}
+.hero-l{font-size:13.5px;color:var(--muted);margin-top:10px}
+.hero-since{font-size:12px;color:var(--muted);margin-top:6px;opacity:.85}
+.hero-q{padding-left:40px;border-left:1px solid var(--line);min-width:190px}
+.hero-q .hq-n{font-size:30px;font-weight:650;letter-spacing:-.8px;font-variant-numeric:tabular-nums}
+.hero-q .hq-l{font-size:12.5px;color:var(--muted);margin-top:6px}
+.hero-q .hq-w{font-size:11.5px;color:var(--amber);margin-top:5px}
+/* KPI row */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-top:0}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:22px 24px;box-shadow:var(--shadow);transition:transform var(--t),border-color var(--t)}
+.kpi:hover{transform:translateY(-2px);border-color:var(--line2)}
+.kpi-l{font-size:11px;text-transform:uppercase;letter-spacing:1.6px;color:var(--muted);font-weight:600}
+.kpi-n{font-size:26px;font-weight:650;letter-spacing:-.6px;margin-top:10px;font-variant-numeric:tabular-nums}
+.kpi-s{font-size:11.5px;color:var(--muted);margin-top:5px}
+/* one centered empty state */
+.zero{padding:72px 32px;text-align:center;box-shadow:var(--shadow)}
+.zero .z-i{font-size:34px;margin-bottom:14px;opacity:.85}
+.zero h3{font-size:19px;font-weight:650;margin:0 0 8px;letter-spacing:-.3px}
+.zero p{max-width:42ch;margin:0 auto 22px;color:var(--muted);font-size:14px}
+.zero button{padding:12px 26px;border-radius:10px;border:0;background:var(--cyan);color:#04211C;font-weight:650;font-size:14px;cursor:pointer;transition:opacity var(--t)}
+.zero button:hover{opacity:.88}
+/* buttons + links */
+button,.tab,.tb-danger{transition:background var(--t),color var(--t),border-color var(--t),opacity var(--t)}
+a{color:var(--brand-blue)}
+a:hover{color:var(--cyan)}
+.tb-danger{background:transparent;border:1px solid rgba(255,120,120,.35);color:#ff9a9a;border-radius:9px;padding:9px 16px;cursor:pointer}
+.tb-danger:hover{background:rgba(255,90,90,.10)}
+/* tables breathe */
+.card table{font-size:13px}
+.card table th{font-size:10.5px;text-transform:uppercase;letter-spacing:1.2px;color:var(--muted);font-weight:600;padding:10px 12px}
+.card table td{padding:11px 12px;border-top:1px solid var(--line)}
+.empty-log,.quiet{color:var(--muted);font-size:13.5px}
+.quiet{padding:18px 22px;border-radius:12px;box-shadow:none}
+.wk{padding:20px 22px;box-shadow:none}
+/* the old flat nav + page chrome are replaced by the shell */
+.nav,.tagline,.arch,.brand-foot,.wrap > header{display:none !important}
+.wrap{max-width:none;margin:0;padding:0}
+/* responsive: sidebar becomes a top bar */
+@media (max-width:900px){
+  .shell{flex-direction:column}
+  .side{width:auto;flex:none;height:auto;position:static;flex-direction:row;align-items:center;
+        gap:10px;padding:12px 16px;border-right:0;border-bottom:1px solid var(--line);overflow-x:auto}
+  .side-logo{padding:0 8px 0 0}
+  .side nav{flex-direction:row;flex:1;gap:2px}
+  .side nav a{padding:8px 12px;font-size:13px;white-space:nowrap}
+  .side nav a span{display:none}
+  .side-acct{border-top:0;margin-top:0;padding:0 0 0 10px;border-left:1px solid var(--line)}
+  .side-acct .ai{display:none}
+  .topbar{padding:16px 20px}
+  .content{padding:24px 20px 56px}
+  .hero{padding:30px 24px}
+  .hero-n{font-size:44px;letter-spacing:-1.4px}
+  .hero-q{padding-left:0;border-left:0;border-top:1px solid var(--line);padding-top:22px;width:100%}
+}
+@media (max-width:520px){ .hero-n{font-size:38px} .card{padding:20px} }
 </style>
 </head>
 <body>
@@ -360,40 +508,39 @@ function brandFallback(img){var n=(parseInt(img.dataset.try||"0",10))+1;img.data
   </div>
 </div>
 
-<div class="wrap">
-  <header>
-    <div class="brand">
-      <img id="brandLogo" class="brand-logo" src="logo.png" alt="Joule" onerror="brandFallback(this)">
-      <div class="brand-inline" id="brandInline" style="display:none;align-items:center;gap:12px">
-        <div class="mark"><svg viewBox="0 0 24 24" fill="none"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z" fill="#33E3C7" stroke="#33E3C7" stroke-width="1.1" stroke-linejoin="round"/></svg></div>
-        <div><h1>Joule</h1><div class="sub">AI cost &amp; carbon control</div></div>
-      </div>
+<div class="shell">
+  <aside class="side">
+    <div class="side-logo">
+      <img src="logo-mark.png" alt="" onerror="this.style.display='none'">
+      <span class="sl-t">Joule</span>
     </div>
-    <div class="status" id="status"></div>
-  </header>
-  <nav class="nav" id="nav" role="navigation" aria-label="Sections">
-    <a href="#home" data-nav="home">Home</a>
-    <a href="#activity" data-nav="activity">Activity</a>
-    <a href="#settings" data-nav="settings">Settings</a>
-    <a href="#docs" data-nav="docs">Docs</a>
-    <span class="nav-sp"></span>
-  </nav>
+    <nav role="navigation" aria-label="Sections">
+      <a href="#overview" data-nav="overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 13h8V3H3zM13 21h8V11h-8zM3 21h8v-6H3zM13 9h8V3h-8z"/></svg><span>Overview</span></a>
+      <a href="#activity" data-nav="activity"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg><span>Activity</span></a>
+      <a href="#reports" data-nav="reports"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg><span>Reports</span></a>
+      <a href="#settings" data-nav="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.65 1.65 0 0 0 15 19.4a1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.5.6.86 1.11.9H21a2 2 0 1 1 0 4h-.09c-.51.04-.97.4-1.11.9z"/></svg><span>Settings</span></a>
+    </nav>
+    <div class="side-acct">
+      <div class="av" id="acctAv">J</div>
+      <div class="ai"><div class="an" id="acctName">Your workspace</div><div class="aw" id="acctSub">signed in</div></div>
+    </div>
+  </aside>
+  <div class="main">
+    <div class="topbar">
+      <div><h1 id="pageTitle">Overview</h1><div class="tb-sub" id="pageSub">What Joule has saved you.</div></div>
+      <div class="status" id="status"></div>
+    </div>
+    <div class="content wrap">
 
   <div class="banner ok" id="banner" style="display:none"></div>
-  <div id="getStartedHost" data-view="home"></div>
+  <div id="getStartedHost" data-view="overview"></div>
 
-  <!-- ============ HOME — outcomes only. Nothing competes with the hero. ============ -->
-  <div data-view="home" id="homeHead">
-    <h2 class="view-head" id="homeTitle">Your savings</h2>
-    <div class="view-sub" id="homeSub">What Joule has saved you, after its own cost — and the quality held while saving it.</div>
-  </div>
-  <!-- ROI hero (Phase 2.1): net $ saved paired with quality-held, then the savings chart -->
-  <div id="valueHost" data-view="home"></div>
-  <div data-view="home" id="weekWrap" style="display:none">
-    <div class="sec-h">This week</div>
-    <div id="weekHost"></div>
-  </div>
-  <div data-view="home" id="homeZero" style="display:none"></div>
+  <!-- ============ OVERVIEW — one hero, one chart, four KPIs. Nothing else. ============ -->
+  <div data-view="overview" id="heroHost"></div>
+  <div data-view="overview" id="chartHost"></div>
+  <div data-view="overview" id="kpiHost"></div>
+  <div data-view="overview" id="weekWrap" style="display:none"><div class="sec-label">This week</div><div id="weekHost"></div></div>
+  <div data-view="overview" id="homeZero" style="display:none"></div>
 
   <div class="arch" data-view="settings">
     <div class="arch-flow">
@@ -492,7 +639,7 @@ function brandFallback(img){var n=(parseInt(img.dataset.try||"0",10))+1;img.data
 
   <div class="card" id="cfgCard" data-view="settings" style="margin-top:18px">
     <h2>Workspace configuration</h2>
-    <p class="cfg-lead">Set the provider key, models and grid region for this Joule instance. Values set here override the environment defaults and are kept <b>in memory only</b> — never written to disk, never returned by the API. <span class="muted">(Single-tenant demo convenience — see the README security note.)</span></p>
+    <p class="cfg-lead">Set the provider key, models and grid region for this workspace. Values are held <b>in memory only</b> — never written to disk and never returned by the API.</p>
     <div class="cfg-grid">
       <label class="cfg-f">
         <span class="cfg-lbl">Provider API key <em class="src" id="src-upstreamApiKey"></em></span>
@@ -549,7 +696,7 @@ function brandFallback(img){var n=(parseInt(img.dataset.try||"0",10))+1;img.data
   </div>
 
   <!-- ============ DOCS — the honesty pages, deliberately public-facing ============ -->
-  <div data-view="docs" id="docsBody"></div>
+  <div data-view="reports" id="reportsBody"></div>
 
   <!-- Destructive actions belong in Settings, never on the customer's home view -->
   <div class="card" data-view="settings" style="margin-top:18px;border-color:rgba(255,90,90,.32)">
@@ -563,13 +710,11 @@ function brandFallback(img){var n=(parseInt(img.dataset.try||"0",10))+1;img.data
     <div id="logbox"><div class="empty-log">No requests yet.</div></div>
   </div>
 
-  <div class="brand-foot">
-    <img src="logo-mark.png" alt="" onerror="this.style.display='none'">
-    <span class="bf-name">Joule</span><span class="muted">— AI cost &amp; carbon control plane ·</span>
-    <a href="https://joule-mvp.onrender.com" target="_blank" rel="noopener">joule-mvp.onrender.com</a>
-  </div>
   <footer id="foot"></footer>
+    </div>
+  </div>
 </div>
+
 
 <script>
 /* =====================================================================
@@ -748,11 +893,21 @@ function celebrate(fr) {
   showStep(4);
 }
 // onboarding hands off into the new HOME view, where their first result is the hero
-gel("toDash").onclick = () => { closeWizard(); location.hash = "#home"; showView("home"); refresh(); };
+gel("toDash").onclick = () => { closeWizard(); location.hash = "#overview"; showView("overview"); refresh(); };
 
 // ---- boot: decide between login screen, wizard, or straight to the dashboard ----
+function paintAccount() {
+  const nm = gel("acctName"), sb = gel("acctSub"), av = gel("acctAv");
+  if (!nm) return;
+  const email = (ME && ME.user && ME.user.email) || null;
+  nm.textContent = email || "Your workspace";
+  sb.textContent = (ME && ME.tenant) ? "workspace " + String(ME.tenant.id).slice(0, 8) : "signed in";
+  av.textContent = (email ? email[0] : "J").toUpperCase();
+}
+
 async function startApp() {
   try { ME = await (await fetch("/api/me")).json(); } catch { ME = null; }
+  paintAccount();
   if (ME && ME.onboarding && !ME.onboarding.complete) {
     const s = ME.onboarding.steps;
     openWizard(!s.providerKey ? 1 : !s.jouleKey ? 2 : 3);
@@ -855,7 +1010,7 @@ async function refresh() {
   let meta, view, advisory;
   // keep the "Get started" panel in step with onboarding progress (cheap, tolerant)
   try { if (!ME || !ME.onboarding || !ME.onboarding.complete) { ME = await (await fetch("/api/me")).json(); await paintGetStarted(); } } catch { /* pre-auth or offline */ }
-  if (CURRENT_VIEW === "home") { paintValue(); paintWeek(); }   // hero: net savings paired with quality
+  if (CURRENT_VIEW === "overview") { paintValue(); paintWeek(); }   // hero: net savings paired with quality
   try {
     [meta, view, advisory] = await Promise.all([
       fetch("/api/stats").then(r => r.json()),
@@ -1230,14 +1385,14 @@ $("cfg-save").onclick = saveConfig;
    Three areas behind real navigation. HOME shows outcomes only; ACTIVITY holds the detail
    for people who want it; SETTINGS holds every operator/config control and all destructive
    actions. Panels are tagged data-view and switched here — no duplicated markup. */
-const VIEWS = ["home", "activity", "settings", "docs"];
+const VIEWS = ["overview", "activity", "reports", "settings"];
 const VIEW_COPY = {
-  home:     { t: "Your savings", s: "What Joule has saved you, after its own cost — and the quality held while saving it." },
-  activity: { t: "Activity", s: "Every request Joule has handled for you, with per-model and per-session detail." },
-  settings: { t: "Settings", s: "Your provider key, models, region and API keys. Only you can see these." },
-  docs:     { t: "Documentation", s: "How to connect, exactly how every number is calculated, and what we do with your data." }
+  overview: { t: "Overview", s: "What Joule has saved you, and the quality held while saving it." },
+  activity: { t: "Activity", s: "Every request Joule has handled for you." },
+  reports:  { t: "Reports", s: "Export your figures and read exactly how each one is calculated." },
+  settings: { t: "Settings", s: "Your keys, models and workspace configuration." }
 };
-let CURRENT_VIEW = "home";
+let CURRENT_VIEW = "overview";
 
 function showView(v) {
   if (!VIEWS.includes(v)) v = "home";
@@ -1248,17 +1403,16 @@ function showView(v) {
     a.classList.toggle("on", on);
     if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   });
-  const h = gel("homeTitle"), sub = gel("homeSub");
+  const h = gel("pageTitle"), sub = gel("pageSub");
   if (h && v !== "home") { h.textContent = VIEW_COPY[v].t; sub.textContent = VIEW_COPY[v].s; }
   if (h && v === "home") { h.textContent = VIEW_COPY.home.t; sub.textContent = VIEW_COPY.home.s; }
   // the heading block itself belongs to whichever view is active
-  const hh = gel("homeHead"); if (hh) { hh.setAttribute("data-view", v); hh.classList.add("shown"); }
-  if (v === "home") { paintValue(); paintWeek(); }
+  if (v === "overview") { paintValue(); paintWeek(); }
   if (v === "settings") { paintStatus(); paintKeys(); paintPlan(); }
-  if (v === "docs") paintDocs();
+  if (v === "reports") paintDocs();
   window.scrollTo({ top: 0, behavior: "instant" in window ? "instant" : "auto" });
 }
-window.addEventListener("hashchange", () => showView((location.hash || "#home").slice(1)));
+window.addEventListener("hashchange", () => showView((location.hash || "#overview").slice(1)));
 
 /* ---------- Phase 2.2: the trust surface ----------
    Reliability evidence, account controls and the honesty docs. Every figure here is REAL:
@@ -1400,101 +1554,105 @@ async function paintWeek() {
    Savings are NEVER rendered without the quality that was held while making them, and
    never as gross-only — the net-of-fees figure sits right beside it. Nothing is faked:
    with no data we say so; with too few verified samples we say that too. */
+/* ---------- OVERVIEW: one hero, one chart, four KPIs. Nothing competes. ----------
+   Honesty rules are unchanged: the hero is the NET figure, quality is paired with it and
+   never faked, energy/carbon are labelled estimated, and with no data we show ONE empty
+   state rather than a wall of zeros. */
+function countUp(el, to, fmt) {
+  const dur = 650, t0 = performance.now();
+  const step = (t) => {
+    const k = Math.min(1, (t - t0) / dur);
+    el.textContent = fmt(to * (1 - Math.pow(1 - k, 3)));   // ease-out cubic
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
 async function paintValue() {
-  const host = $("valueHost");
-  if (!host) return;
+  const heroHost = gel("heroHost"), chartHost = gel("chartHost"), kpiHost = gel("kpiHost");
+  if (!heroHost) return;
   let r; try { r = await (await fetch("/api/roi")).json(); } catch { return; }
 
-  // PROGRESSIVE DISCLOSURE: with no data, HOME collapses to ONE empty state with a single
-  // call to action — never a stack of "No … yet" boxes, and never fabricated numbers.
-  // Treat ANY unexpected shape (error body, 401, partial payload) as "no data" rather than
-  // throwing — a render error here would blank the whole page.
+  // PROGRESSIVE DISCLOSURE: no data => ONE centered empty state, every other module hidden.
+  // Any unexpected shape (401/error/partial) is treated as "no data" rather than throwing.
   if (!r || r.empty || !r.lifetime || !r.net || !Array.isArray(r.series)) {
-    host.innerHTML = "";
+    heroHost.innerHTML = ""; chartHost.innerHTML = ""; kpiHost.innerHTML = "";
     const wk = gel("weekWrap"); if (wk) wk.style.display = "none";
     const z = gel("homeZero");
     if (z) {
       z.style.display = "block";
-      z.innerHTML = '<div class="zero"><div class="z-i">⚡</div>' +
+      z.innerHTML = '<div class="zero"><div class="z-i">\u26A1</div>' +
         '<h3>No savings to show yet</h3>' +
-        '<p>Once your app sends its first request through Joule, this page fills with your real numbers — what you saved, and the quality held while saving it. We never show sample data.</p>' +
-        '<button id="zeroCta" type="button">Connect your app</button></div>';
+        '<p>Send your first request and this fills with your real numbers \u2014 what you saved, and the quality held while saving it. We never show sample data.</p>' +
+        '<button id="zeroCta" type="button">Send your first request</button></div>';
       gel("zeroCta").onclick = () => {
-        if (ME && ME.onboarding && !ME.onboarding.complete) { const s = ME.onboarding.steps; openWizard(!s.providerKey ? 1 : !s.jouleKey ? 2 : 3); }
-        else location.hash = "#settings";
+        if (ME && ME.onboarding && !ME.onboarding.complete) { const st = ME.onboarding.steps; openWizard(!st.providerKey ? 1 : !st.jouleKey ? 2 : 3); }
+        else location.hash = "#activity";
       };
     }
     return;
   }
   const z0 = gel("homeZero"); if (z0) z0.style.display = "none";
 
-  const since = new Date(r.startDate + "T00:00:00Z").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
   const n = r.net, q = r.quality;
-  const kg = r.lifetime.savedCarbonG / 1000;
+  const since = new Date(r.startDate + "T00:00:00Z").toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" });
 
-  // quality, paired — honest about insufficient samples
-  const qHtml = q.score == null
-    ? '<div class="vq-n muted" style="font-size:15px">not yet verified</div><div class="vq-l">quality — no samples judged yet</div>'
-    : '<div class="vq-n">' + (q.score * 100).toFixed(1) + '%</div><div class="vq-l">quality held · ' + q.verified + ' verified' +
-      (q.sufficient ? '' : ' <span style="color:#ffcc66">(below ' + q.minSamples + ' — not yet a guarantee)</span>') + '</div>';
+  // ---- HERO: net saved, with quality held beside it. Never one without the other. ----
+  const qBlock = q.score == null
+    ? '<div class="hq-n" style="font-size:19px;color:var(--muted);letter-spacing:0">Not yet verified</div>' +
+      '<div class="hq-l">quality held \u2014 no answers judged yet</div>'
+    : '<div class="hq-n" id="heroQ">' + (q.score * 100).toFixed(1) + '%</div>' +
+      '<div class="hq-l">quality held \u00b7 ' + q.verified + ' verified</div>' +
+      (q.sufficient ? '' : '<div class="hq-w">below ' + q.minSamples + ' samples \u2014 not yet a guarantee</div>');
 
-  // cumulative chart: gross (area) + net-of-fees (dashed) — hand-rolled SVG, no library
-  const s = r.series, w = 600, h = 110, pad = 6;
-  const xs = s.map((_, i) => s.length > 1 ? pad + i / (s.length - 1) * (w - 2 * pad) : w / 2);
-  const lo = Math.min(0, ...s.map((d) => d.cumNet));
-  const hi = Math.max(...s.map((d) => d.cumSavedCost), 1e-9);
-  const Y = (v) => h - pad - ((v - lo) / ((hi - lo) || 1e-9)) * (h - 2 * pad);
-  const line = (key) => xs.map((x, i) => x.toFixed(1) + "," + Y(s[i][key]).toFixed(1)).join(" ");
-  const gross = line("cumSavedCost"), net = line("cumNet");
-  const zeroY = Y(0).toFixed(1);
+  heroHost.innerHTML =
+    '<div class="hero"><div class="hero-in">' +
+      '<div class="hero-main"><div class="hero-n" id="heroN">' + fmtUsd(n.netAfterFees) + '</div>' +
+        '<div class="hero-l">saved, net of what Joule costs you</div>' +
+        '<div class="hero-since">since ' + esc(since) + ' \u00b7 ' + r.lifetime.requests + ' requests optimised</div></div>' +
+      '<div class="hero-q">' + qBlock + '</div>' +
+    '</div></div>';
+  const hn = gel("heroN");
+  if (hn) countUp(hn, n.netAfterFees, (v) => fmtUsd(v));
 
-  const leverRow = (l, max) => '<div class="lev"><span class="lev-nm">' + esc(l.label) + '</span>' +
-    '<span class="lev-bar"><span style="width:' + Math.max(0, Math.min(100, (l.savedUsd / (max || 1)) * 100)).toFixed(1) + '%"></span></span>' +
-    '<span class="risk ' + esc(l.risk) + '" title="' + esc(l.note) + '">' + esc(l.risk) + '</span>' +
-    '<span class="lev-amt">' + fmtUsd(l.savedUsd) + '</span></div>';
-  const baseL = r.levers.filter((l) => l.basis === "baseline");
-  const addL = r.levers.filter((l) => l.basis === "additional");
-  const maxBase = Math.max(...baseL.map((l) => Math.abs(l.savedUsd)), 1e-9);
-  const maxAdd = Math.max(...addL.map((l) => Math.abs(l.savedUsd)), 1e-9);
-
-  host.innerHTML =
-    '<div class="val">' +
-      '<div class="val-since">Since ' + esc(since) + ' · ' + r.days + ' day' + (r.days === 1 ? '' : 's') + ' · ' + r.lifetime.requests + ' requests optimised</div>' +
-      '<div class="val-top">' +
-        '<div class="val-hero"><div class="vh-n">' + fmtUsd(n.netAfterFees) + '</div><div class="vh-l">net saved, after Joule\'s own cost</div></div>' +
-        '<div class="val-q">' + qHtml + '</div>' +
-        '<div class="val-side">' +
-          '<div><div class="vs-n">' + fmtUsd(n.grossSaved) + '</div><div class="vs-l">gross saved</div></div>' +
-          '<div><div class="vs-n">' + kg.toFixed(2) + ' kg</div><div class="vs-l">CO₂ avoided ·&nbsp;est</div></div>' +
-          '<div><div class="vs-n">' + fmtWh(r.lifetime.savedEnergyWh) + '</div><div class="vs-l">energy ·&nbsp;est</div></div>' +
-        '</div>' +
-      '</div>' +
-
-      '<div class="val-chart"><svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" style="width:100%;height:110px">' +
-        '<polygon points="' + pad + ',' + zeroY + ' ' + gross + ' ' + xs[xs.length - 1].toFixed(1) + ',' + zeroY + '" fill="rgba(51,227,199,.12)"/>' +
-        '<line x1="' + pad + '" y1="' + zeroY + '" x2="' + (w - pad) + '" y2="' + zeroY + '" stroke="var(--line,#1e2733)" stroke-width="1"/>' +
-        '<polyline points="' + gross + '" fill="none" stroke="var(--cyan,#33E3C7)" stroke-width="2"/>' +
-        '<polyline points="' + net + '" fill="none" stroke="#7fb2ff" stroke-width="1.6" stroke-dasharray="4 3"/>' +
-      '</svg>' +
-      '<div class="lg"><span><i style="background:var(--cyan,#33E3C7)"></i>cumulative gross saved</span>' +
-        '<span><i style="background:#7fb2ff"></i>net of verification' + (n.subscriptionMonthly > 0 ? ' + subscription' : '') + '</span></div></div>' +
-
-      '<div class="val-net">' +
-        'gross <b>' + fmtUsd(n.grossSaved) + '</b> − verification <b>' + fmtUsd(n.verifyCost) + '</b>' +
-        (n.subscriptionMonthly > 0 ? ' − subscription <b>' + fmtUsd(n.subscriptionToDate) + '</b> <span class="muted">($' + n.subscriptionMonthly + '/mo)</span>' : '') +
-        ' = <b class="' + (n.netAfterFees >= 0 ? 'cyan' : 'q-warn') + '">' + fmtUsd(n.netAfterFees) + ' net</b>' +
-        (n.subscriptionMonthly > 0
-          ? '<br>Joule costs <b>' + fmtUsd(n.subscriptionMonthly) + '/mo</b> · saving you <b>' + fmtUsd(n.avgMonthlySaving) + '/mo</b> · <b class="' + (n.netMonthly >= 0 ? 'cyan' : 'q-warn') + '">net ' + (n.netMonthly >= 0 ? '+' : '') + fmtUsd(n.netMonthly) + '/mo</b>' +
-            (n.paybackMonths != null ? ' · pays for itself in <b>' + n.paybackMonths.toFixed(1) + '</b> month' + (n.paybackMonths === 1 ? '' : 's') : '')
-          : '<br><span class="muted">Set SUBSCRIPTION_COST_MONTHLY to see payback against your plan price.</span>') +
-        '<br><span class="muted">Cost is measured from real token usage; energy and carbon are estimated.</span>' +
-      '</div>' +
-
-      (r.levers.length ? '<div class="levers">' +
-        '<div class="lev-h">Where it came from</div>' + baseL.map((l) => leverRow(l, maxBase)).join('') +
-        (addL.length ? '<div class="lev-h">Separate lines <span style="text-transform:none;letter-spacing:0">— different basis, not added into the headline</span></div>' + addL.map((l) => leverRow(l, maxAdd)).join('') : '') +
-      '</div>' : '') +
+  // ---- savings over time: gross (area) + net-of-fees (dashed). Hand-rolled SVG. ----
+  const s2 = r.series, w = 900, h = 190, padX = 8, padY = 14;
+  const xs = s2.map((_, i) => s2.length > 1 ? padX + i / (s2.length - 1) * (w - 2 * padX) : w / 2);
+  const lo = Math.min(0, ...s2.map((d) => d.cumNet));
+  const hi = Math.max(...s2.map((d) => d.cumSavedCost), 1e-9);
+  const Y = (v) => h - padY - ((v - lo) / ((hi - lo) || 1e-9)) * (h - 2 * padY);
+  const line = (key) => xs.map((x, i) => x.toFixed(1) + "," + Y(s2[i][key]).toFixed(1)).join(" ");
+  const gross = line("cumSavedCost"), net = line("cumNet"), zeroY = Y(0).toFixed(1);
+  chartHost.innerHTML =
+    '<div class="card"><h2>Savings over time</h2>' +
+    '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" style="width:100%;height:190px;display:block">' +
+      '<defs><linearGradient id="gfill" x1="0" y1="0" x2="0" y2="1">' +
+        '<stop offset="0%" stop-color="#33E3C7" stop-opacity=".22"/><stop offset="100%" stop-color="#33E3C7" stop-opacity="0"/>' +
+      '</linearGradient></defs>' +
+      '<polygon points="' + padX + ',' + zeroY + ' ' + gross + ' ' + xs[xs.length - 1].toFixed(1) + ',' + zeroY + '" fill="url(#gfill)"/>' +
+      '<line x1="' + padX + '" y1="' + zeroY + '" x2="' + (w - padX) + '" y2="' + zeroY + '" stroke="rgba(255,255,255,.10)" stroke-width="1"/>' +
+      '<polyline points="' + gross + '" fill="none" stroke="#33E3C7" stroke-width="2.5" stroke-linejoin="round"/>' +
+      '<polyline points="' + net + '" fill="none" stroke="#2D87AE" stroke-width="2" stroke-dasharray="5 4"/>' +
+    '</svg>' +
+    '<div class="lg" style="margin-top:14px"><span><i style="background:#33E3C7"></i>cumulative saved (gross)</span>' +
+      '<span><i style="background:#2D87AE"></i>net of verification' + (n.subscriptionMonthly > 0 ? ' + subscription' : '') + '</span></div>' +
+    '<div class="hero-since" style="margin-top:10px">gross ' + fmtUsd(n.grossSaved) + ' \u2212 verification ' + fmtUsd(n.verifyCost) +
+      (n.subscriptionMonthly > 0 ? ' \u2212 subscription ' + fmtUsd(n.subscriptionToDate) : '') +
+      ' = <b style="color:var(--cyan)">' + fmtUsd(n.netAfterFees) + ' net</b>' +
+      (n.paybackMonths != null ? ' \u00b7 pays for itself in ' + n.paybackMonths.toFixed(1) + ' months' : '') +
+      '<br>Cost is measured from real token usage; energy and carbon are estimated.</div>' +
     '</div>';
+
+  // ---- four compact KPIs ----
+  let t = null; try { t = (await (await fetch("/api/stats")).json()).totals; } catch { /* optional */ }
+  const hitRate = t && t.requests ? t.cacheHits / t.requests : 0;
+  const kpi = (l, v, sub) => '<div class="kpi"><div class="kpi-l">' + l + '</div><div class="kpi-n">' + v + '</div><div class="kpi-s">' + sub + '</div></div>';
+  kpiHost.innerHTML = '<div class="kpis">' +
+    kpi("Spend", t ? fmtUsd(t.cost.actual) : "—", "measured from token usage") +
+    kpi("Requests", String(r.lifetime.requests), "optimised by Joule") +
+    kpi("CO\u2082 avoided", (r.lifetime.savedCarbonG / 1000).toFixed(2) + " kg", "estimated") +
+    kpi("Cache hit rate", t ? (hitRate * 100).toFixed(1) + "%" : "—", "served without recomputing") +
+  '</div>';
 }
 
 // "Get started" panel — shown instead of a wall of zeros until onboarding is done.
@@ -1517,7 +1675,7 @@ async function paintGetStarted() {
    ReferenceError that kills the whole script, leaving every [data-view] panel hidden
    and the page blank. Keep all top-level invocation here, after every declaration.
    --------------------------------------------------------------------------- */
-showView((location.hash || "#home").slice(1));   // real navigation, back/forward friendly
+showView((location.hash || "#overview").slice(1));   // real navigation, back/forward friendly
 loadConfig();                                     // populate the Settings form
 bootAuth();                                       // login screen vs. wizard vs. dashboard
 setInterval(() => { if (!AUTH_CFG.authRequired || ACCESS_TOKEN) refresh(); }, 4000);
