@@ -263,6 +263,50 @@ single call to action — never six stacked "No … yet" boxes, and never fabric
 Finishing onboarding hands off directly into Home, where the user's first real result is the
 hero.
 
+## The trust surface — evidence for finance, security and your own sanity
+
+Routing production traffic through a proxy is a trust decision. These are the artefacts and
+the evidence that make it defensible — all real, all tenant-scoped, nothing fabricated.
+
+### Audit-ready export
+
+```bash
+GET /api/report?format=pdf     # branded, dated, workspace-named — the artefact you file
+GET /api/report?format=csv     # row-level detail
+GET /api/report?format=json    # machine-readable, full methodology block
+```
+
+All three are built from the **same totals**, so they can never disagree. The PDF is generated
+by a **hand-rolled writer** (`src/pdf.js`) — zero new dependencies — and states, in full:
+spend (measured), gross → **net** saving, energy and carbon (**estimated**, with the model
+spelled out, GHG Scope 2 / SCI-aligned), quality (**sampled**, with the marginal-not-per-query
+limit), and measured p50/p95/p99 latency. It explicitly notes that Joule makes **no
+certification claims**.
+
+### Reliability evidence — `GET /api/status`
+
+Live component health (proxy, database, provider reachability, grid feed live-vs-fallback),
+real process uptime, and **measured** p50/p95/p99 of Joule's own latency from your request log
+— the data that answers "how much does the proxy add?".
+
+**We publish no availability percentage.** Uptime history isn't retained yet, so claiming
+"99.9%" would be fabricated. The status page says so and marks it *on roadmap*.
+
+### Docs (in-app, `#docs`)
+
+- **Quickstart** — the two-line integration, prefilled with your endpoint.
+- **How every number is calculated** — cost/energy/carbon/savings/quality, each with its
+  method *and its limits*. The honesty is the point, not the fine print.
+- **Security & data handling** — what's stored, what isn't (`LOG_PROMPTS` off by default),
+  tenant isolation + RLS, AES-256-GCM key encryption. It states plainly that we hold **no**
+  third-party certification and will not imply one until we do.
+
+### Account controls
+
+Under **Settings**: view and **rotate** API keys (rotation issues a new key and stops the old
+one immediately), see plan and usage, and export all your data in any of the three formats —
+the portability half of the residency story.
+
 ## The value surface — what you've saved, stated plainly
 
 The top of the dashboard answers "is this worth it?" without any mental math. Everything is

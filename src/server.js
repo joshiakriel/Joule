@@ -18,6 +18,7 @@ const reasoning = require("./reasoning");
 const upstream = require("./upstream");
 const tenancy = require("./tenancy");
 const digest = require("./digest");
+const reportpdf = require("./reportpdf");
 
 // Fill in reasoning-token counts + capping/downgrade savings (labelled estimates).
 function finalizeReasoning(info, tier, usage) {
@@ -827,6 +828,42 @@ app.get("/api/advisory", (req, res) => {
   res.json(cacheadvice.advisory(store.all(req.tenant.id)));
 });
 
+// ---- trust surface (Phase 2.2): reliability evidence -----------------------
+// Real component health + REAL measured latency + REAL process uptime. We do not compute
+// an uptime percentage or a "last incident": we don't retain incident history, and
+// inventing either would be exactly the fabricated-reliability claim we refuse to make.
+app.get("/api/status", async (req, res) => {
+  const tenant = req.tenant.id;
+  const db = store.health();
+  const prov = config.dryRun ? { status: "dry_run" } : (config.upstreamApiKey || tenancy.getUpstreamKey(tenant) ? upstream.providerHealth() : { status: "no_key" });
+  let grid = { status: "unknown" };
+  try { const g = await getIntensity(); grid = { status: g.live ? "live" : "fallback", source: g.source, zone: g.zone }; } catch { grid = { status: "fallback" }; }
+  const latency = store.latencyStats(store.predicateFor({ tenant }));
+  res.json({
+    ok: true,
+    components: {
+      proxy: { status: "ok", uptimeSeconds: Math.floor(process.uptime()), startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString() },
+      database: { status: db.status, backend: db.backend, pendingWrites: db.pendingWrites || 0 },
+      provider: prov,
+      grid
+    },
+    // MEASURED end-to-end durations for this workspace — null when nothing to measure.
+    latency,
+    // Stated plainly rather than fabricated:
+    uptimeHistory: { available: false, note: "Historical uptime and incident history are not retained yet, so no availability percentage is claimed here. Current component state above is live. (On roadmap.)" }
+  });
+});
+
+// Rotate a Joule key: mint a replacement and revoke the old one. Returns the new key ONCE.
+app.post("/api/keys/:id/rotate", (req, res) => {
+  const tenantId = req.tenant.id;
+  const existing = tenancy.listKeys(tenantId).find((k) => k.id === req.params.id);
+  if (!existing) return res.status(404).json({ ok: false, message: "key not found" }); // never rotate another tenant's key
+  const minted = tenancy.mintKey(tenantId, existing.name || "rotated");
+  tenancy.revokeKey(req.params.id);   // old key stops authenticating immediately
+  res.status(201).json({ ok: true, key: minted.key, id: minted.id, last4: minted.last4, name: minted.name, revoked: req.params.id });
+});
+
 // Weekly value digest for THIS tenant — the same payload the email uses, so the in-app
 // summary and the email can never disagree. ?days=N to change the window; ?send=1 to
 // deliver it (no-ops cleanly, and reports why, when no email provider is configured).
@@ -1033,6 +1070,31 @@ app.get("/api/report", (req, res) => {
     res.set("content-type", "text/csv");
     res.set("content-disposition", 'attachment; filename="joule-report.csv"');
     return res.send(store.toCsv(pred));
+  }
+  // Branded, dated, filable PDF — built from the SAME totals as the JSON/CSV, so the
+  // three formats can never disagree. Hand-rolled writer, no dependency.
+  if (req.query.format === "pdf") {
+    const minSamples = config.verify.minCalibrationN;
+    const subMonthly = config.subscriptionCostMonthly;
+    const days = (period.from && period.to)
+      ? Math.max(1, Math.round((new Date(period.to) - new Date(period.from)) / 86400000) + 1) : 1;
+    const subscriptionToDate = subMonthly > 0 ? subMonthly * (days / 30.4375) : 0;
+    const buf = reportpdf.build({
+      tenantName: (tenancy.getTenant(tenant) || {}).name || null,
+      tenantId: tenant,
+      period: { ...period, label: period.from ? `${String(period.from).slice(0, 10)} to ${String(period.to).slice(0, 10)} (${days} day${days === 1 ? "" : "s"})` : "no data in range" },
+      totals,
+      quality: { score: totals.qualityScore, verified: totals.verified, minSamples, sufficient: totals.verified >= minSamples },
+      net: {
+        subscriptionToDate,
+        netAfterFees: totals.cost.saved - totals.verifyCost.costUsd - subscriptionToDate
+      },
+      latency: store.latencyStats(pred),
+      generatedAt: Date.now()
+    });
+    res.set("content-type", "application/pdf");
+    res.set("content-disposition", 'attachment; filename="joule-report.pdf"');
+    return res.send(buf);
   }
   const q = verify.qualityStats(tenant);
   res.set("content-disposition", 'attachment; filename="joule-report.json"');

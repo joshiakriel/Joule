@@ -342,6 +342,7 @@ function brandFallback(img){var n=(parseInt(img.dataset.try||"0",10))+1;img.data
       <div class="why">Run the snippet in your own app, or send a test request from here. Joule <b>routes</b> it to the cheapest model that can handle it, <b>meters</b> cost · energy · carbon, and <b>verifies</b> a sample of answers for quality.</div>
       <div class="waiting" id="waitBox"><span class="pulse"></span><span>Waiting for your first request… this page updates the moment one arrives.</span></div>
       <div class="gate-msg" id="testMsg"></div>
+      <div class="quiet" style="margin-top:12px;font-size:12.5px">Quality checks run <b>after</b> your response is sent, off your request path — they add no latency to what your users see.</div>
       <div class="wiz-nav"><button class="go" id="sendTest" type="button">Send a test request for me</button></div>
     </div>
 
@@ -374,6 +375,7 @@ function brandFallback(img){var n=(parseInt(img.dataset.try||"0",10))+1;img.data
     <a href="#home" data-nav="home">Home</a>
     <a href="#activity" data-nav="activity">Activity</a>
     <a href="#settings" data-nav="settings">Settings</a>
+    <a href="#docs" data-nav="docs">Docs</a>
     <span class="nav-sp"></span>
   </nav>
 
@@ -526,6 +528,28 @@ function brandFallback(img){var n=(parseInt(img.dataset.try||"0",10))+1;img.data
       <span id="cfg-msg" class="reason"></span>
     </div>
   </div>
+
+  <!-- ============ SETTINGS: service status + account (trust surface) ============ -->
+  <div class="card" data-view="settings" style="margin-top:18px">
+    <h2>Service status</h2>
+    <div id="statusBody"><div class="empty-log">Checking…</div></div>
+  </div>
+
+  <div class="card" data-view="settings" style="margin-top:18px">
+    <h2>API keys</h2>
+    <p class="view-sub" style="margin:6px 0 12px">Your app authenticates with these. Rotating issues a new key and stops the old one immediately.</p>
+    <div id="keysBody"><div class="empty-log">Loading…</div></div>
+    <div class="run" style="margin-top:12px"><button id="newKeyBtn">Create a new key</button><span id="keyMsg" class="reason"></span></div>
+    <div class="code-box" id="newKeyBox" style="display:none"><button class="copy-btn" data-copy="newKeyOut">Copy</button><pre class="keyout" id="newKeyOut"></pre></div>
+  </div>
+
+  <div class="card" data-view="settings" style="margin-top:18px">
+    <h2>Plan &amp; data</h2>
+    <div id="planBody"><div class="empty-log">Loading…</div></div>
+  </div>
+
+  <!-- ============ DOCS — the honesty pages, deliberately public-facing ============ -->
+  <div data-view="docs" id="docsBody"></div>
 
   <!-- Destructive actions belong in Settings, never on the customer's home view -->
   <div class="card" data-view="settings" style="margin-top:18px;border-color:rgba(255,90,90,.32)">
@@ -737,7 +761,8 @@ async function startApp() {
 }
 
 async function bootAuth() {
-  try { AUTH_CFG = await (await _fetch("/api/auth-config")).json(); } catch { AUTH_CFG = { authRequired: false }; }
+  // a null/garbage body must not crash boot — fall back to the open-dashboard default
+  try { AUTH_CFG = (await (await _fetch("/api/auth-config")).json()) || { authRequired: false }; } catch { AUTH_CFG = { authRequired: false }; }
   if (!AUTH_CFG.authRequired) return startApp();      // open dev/DRY_RUN deployment
   if (!AUTH_CFG.configured) {                          // auth on but Supabase not wired up yet
     gel("authGate").style.display = "flex";
@@ -838,6 +863,10 @@ async function refresh() {
       fetch("/api/advisory").then(r => r.json()).catch(() => null)
     ]);
   } catch { return; }
+  // A 401/error body parses as JSON perfectly well, so a successful fetch is NOT a
+  // successful payload. Bail quietly on any unexpected shape rather than throwing —
+  // an exception here would leave the dashboard half-rendered.
+  if (!meta || !meta.config || !meta.grid || !view || !view.totals) return;
   const g = meta.grid, c = meta.config, t = view.totals, qv = view.quality || {};
 
   // status pills (global instance state — not filtered)
@@ -1150,6 +1179,7 @@ let loadedCfg = {};
 
 async function loadConfig() {
   let c; try { c = await (await fetch("/api/config")).json(); } catch { return; }
+  if (!c || typeof c !== "object" || !("upstreamBaseUrl" in c)) return; // 401/error/null body — leave the form untouched
   loadedCfg = c;
   $("archProv").textContent = providerHost(c.upstreamBaseUrl);
   $("cfg-upstreamBaseUrl").value = c.upstreamBaseUrl || "";
@@ -1196,21 +1226,16 @@ async function saveConfig() {
 }
 $("cfg-save").onclick = saveConfig;
 
-// Boot through the auth gate: it decides login screen vs. wizard vs. dashboard, then
-// calls startApp() -> refresh(). Polling only runs once we're actually past the gate.
-showView((location.hash || "#home").slice(1));   // real navigation, back/forward friendly
-bootAuth();
-setInterval(() => { if (!AUTH_CFG.authRequired || ACCESS_TOKEN) refresh(); }, 4000);
-
 /* ---------- Phase 2.0: information architecture ----------
    Three areas behind real navigation. HOME shows outcomes only; ACTIVITY holds the detail
    for people who want it; SETTINGS holds every operator/config control and all destructive
    actions. Panels are tagged data-view and switched here — no duplicated markup. */
-const VIEWS = ["home", "activity", "settings"];
+const VIEWS = ["home", "activity", "settings", "docs"];
 const VIEW_COPY = {
   home:     { t: "Your savings", s: "What Joule has saved you, after its own cost — and the quality held while saving it." },
   activity: { t: "Activity", s: "Every request Joule has handled for you, with per-model and per-session detail." },
-  settings: { t: "Settings", s: "Your provider key, models, region and API keys. Only you can see these." }
+  settings: { t: "Settings", s: "Your provider key, models, region and API keys. Only you can see these." },
+  docs:     { t: "Documentation", s: "How to connect, exactly how every number is calculated, and what we do with your data." }
 };
 let CURRENT_VIEW = "home";
 
@@ -1229,15 +1254,130 @@ function showView(v) {
   // the heading block itself belongs to whichever view is active
   const hh = gel("homeHead"); if (hh) { hh.setAttribute("data-view", v); hh.classList.add("shown"); }
   if (v === "home") { paintValue(); paintWeek(); }
+  if (v === "settings") { paintStatus(); paintKeys(); paintPlan(); }
+  if (v === "docs") paintDocs();
   window.scrollTo({ top: 0, behavior: "instant" in window ? "instant" : "auto" });
 }
 window.addEventListener("hashchange", () => showView((location.hash || "#home").slice(1)));
+
+/* ---------- Phase 2.2: the trust surface ----------
+   Reliability evidence, account controls and the honesty docs. Every figure here is REAL:
+   component state comes from /api/status, latency is measured from the request log, and we
+   state plainly that we retain no uptime history rather than inventing an availability %. */
+const DOT = (s) => '<span class="gdot" style="background:' + (s === "ok" || s === "live" ? "var(--cyan,#33E3C7)" : s === "degraded" || s === "fallback" ? "#ffcc66" : "#888") + ';display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px"></span>';
+
+async function paintStatus() {
+  const box = gel("statusBody"); if (!box) return;
+  let s; try { s = await (await fetch("/api/status")).json(); } catch { box.innerHTML = '<div class="empty-log">Status unavailable.</div>'; return; }
+  const c = s.components;
+  const up = c.proxy.uptimeSeconds;
+  const upTxt = up > 86400 ? Math.floor(up / 86400) + "d " + Math.floor((up % 86400) / 3600) + "h" : up > 3600 ? Math.floor(up / 3600) + "h " + Math.floor((up % 3600) / 60) + "m" : Math.floor(up / 60) + "m";
+  const L = s.latency && s.latency.all;
+  box.innerHTML =
+    '<div class="week">' +
+      '<div class="wk"><div class="wk-l">Proxy</div><div class="wk-n" style="font-size:15px">' + DOT("ok") + 'Operational</div><div class="wk-s">running ' + upTxt + '</div></div>' +
+      '<div class="wk"><div class="wk-l">Database</div><div class="wk-n" style="font-size:15px">' + DOT(c.database.status) + esc(c.database.status) + '</div><div class="wk-s">' + esc(c.database.backend) + (c.database.pendingWrites ? ' · ' + c.database.pendingWrites + ' queued' : '') + '</div></div>' +
+      '<div class="wk"><div class="wk-l">Model provider</div><div class="wk-n" style="font-size:15px">' + DOT(c.provider.status) + esc(c.provider.status) + '</div><div class="wk-s">' + (c.provider.consecutiveFailures ? c.provider.consecutiveFailures + ' recent failures' : 'no recent failures') + '</div></div>' +
+      '<div class="wk"><div class="wk-l">Grid data</div><div class="wk-n" style="font-size:15px">' + DOT(c.grid.status) + esc(c.grid.status) + '</div><div class="wk-s">' + esc(c.grid.zone || "") + '</div></div>' +
+    '</div>' +
+    (L && L.n
+      ? '<div class="sec-h">Joule\'s own latency — measured, not estimated</div><div class="week">' +
+        '<div class="wk"><div class="wk-l">Median (p50)</div><div class="wk-n">' + L.p50 + ' ms</div></div>' +
+        '<div class="wk"><div class="wk-l">p95</div><div class="wk-n">' + L.p95 + ' ms</div></div>' +
+        '<div class="wk"><div class="wk-l">p99</div><div class="wk-n">' + L.p99 + ' ms</div></div>' +
+        '<div class="wk"><div class="wk-l">Requests measured</div><div class="wk-n">' + L.n + '</div></div></div>'
+      : '<div class="quiet" style="margin-top:12px">No requests measured yet, so no latency figures are shown.</div>') +
+    '<div class="quiet" style="margin-top:12px">' + esc(s.uptimeHistory.note) + '</div>';
+}
+
+async function paintKeys() {
+  const box = gel("keysBody"); if (!box) return;
+  let d; try { d = await (await fetch("/api/keys")).json(); } catch { box.innerHTML = '<div class="empty-log">Unavailable.</div>'; return; }
+  const live = (d.keys || []).filter((k) => !k.revoked);
+  if (!live.length) { box.innerHTML = '<div class="empty-log">No active keys. Create one to connect your app.</div>'; return; }
+  box.innerHTML = '<div class="tbl-scroll"><table><thead><tr><th>Name</th><th>Key</th><th>Created</th><th></th></tr></thead><tbody>' +
+    live.map((k) => '<tr><td>' + esc(k.name) + '</td><td class="mono">…' + esc(k.last4) + '</td><td class="muted">' + new Date(k.createdAt).toLocaleDateString() + '</td>' +
+      '<td><button class="tab" data-rotate="' + esc(k.id) + '">Rotate</button></td></tr>').join("") +
+    '</tbody></table></div>';
+  box.querySelectorAll("[data-rotate]").forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm("Rotate this key? The current key stops working immediately.")) return;
+      const r = await (await fetch("/api/keys/" + b.dataset.rotate + "/rotate", { method: "POST" })).json();
+      if (r.ok) { gel("newKeyOut").textContent = r.key; gel("newKeyBox").style.display = "block"; gel("keyMsg").textContent = "New key created — copy it now, it won't be shown again."; paintKeys(); }
+    };
+  });
+}
+const newKeyBtn = gel("newKeyBtn");
+if (newKeyBtn) newKeyBtn.onclick = async () => {
+  const r = await (await fetch("/api/keys", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "key" }) })).json();
+  gel("newKeyOut").textContent = r.key; gel("newKeyBox").style.display = "block";
+  gel("keyMsg").textContent = "Copy it now — it won't be shown again."; paintKeys();
+};
+
+async function paintPlan() {
+  const box = gel("planBody"); if (!box) return;
+  let roi; try { roi = await (await fetch("/api/roi")).json(); } catch { return; }
+  const reqs = roi.empty ? 0 : roi.lifetime.requests;
+  box.innerHTML =
+    '<div class="week">' +
+      '<div class="wk"><div class="wk-l">Requests to date</div><div class="wk-n">' + reqs + '</div></div>' +
+      '<div class="wk"><div class="wk-l">Plan</div><div class="wk-n" style="font-size:15px">' + (roi.empty || !roi.net.subscriptionMonthly ? "No plan price set" : fmtUsd(roi.net.subscriptionMonthly) + "/mo") + '</div></div>' +
+    '</div>' +
+    '<div class="sec-h">Export your data</div>' +
+    '<div class="wiz-nav" style="margin-top:0">' +
+      '<a class="tab" href="/api/report?format=pdf" target="_blank" rel="noopener">Download PDF report</a>' +
+      '<a class="tab" href="/api/report?format=csv" target="_blank" rel="noopener">Download CSV</a>' +
+      '<a class="tab" href="/api/report?format=json" target="_blank" rel="noopener">Download JSON</a>' +
+    '</div>' +
+    '<div class="quiet" style="margin-top:12px">Your data is yours: every request record can be exported at any time in an open format.</div>';
+}
+
+/* ---------- DOCS: quickstart, methodology, security. The honesty pages. ---------- */
+function paintDocs() {
+  const box = gel("docsBody"); if (!box) return;
+  const ep = (ME && ME.endpoint) || (location.origin + "/v1");
+  box.innerHTML =
+    '<div class="card"><h2>Quickstart</h2>' +
+      '<p class="view-sub" style="margin:6px 0 10px">Point any OpenAI-compatible client at Joule. Two lines change; nothing else in your code does.</p>' +
+      '<div class="code-box"><pre>' + esc('import OpenAI from "openai";\n\nconst client = new OpenAI({\n  baseURL: "' + ep + '",\n  apiKey: "YOUR_JOULE_KEY",\n});') + '</pre></div>' +
+      '<p class="view-sub" style="margin:10px 0 0">Create a key under Settings → API keys. Your provider key stays encrypted on our server and is never sent to your browser.</p>' +
+    '</div>' +
+
+    '<div class="card" style="margin-top:18px"><h2>How every number is calculated</h2>' +
+      '<div class="sec-h">Cost — measured</div>' +
+      '<p class="view-sub">Token counts returned by your provider × that provider\'s published prices. Exact arithmetic, not a projection.</p>' +
+      '<div class="sec-h">Energy — estimated</div>' +
+      '<p class="view-sub">Modelled per request: a base per tier, plus a per-1k-output-token term, plus a much smaller per-1k-input-token term (inference energy is dominated by the decode phase). Anchored to published GPU characterisation methodology. <b>Not</b> measured from hardware power draw.</p>' +
+      '<div class="sec-h">Carbon — estimated</div>' +
+      '<p class="view-sub">Energy × grid carbon intensity for your region — live from Electricity Maps when configured, otherwise a clearly-labelled fallback constant. Aligned to GHG Protocol Scope 2 and the SCI (ISO/IEC 21031) approach. Its accuracy is bounded by the energy estimate above.</p>' +
+      '<div class="sec-h">Savings — a counterfactual</div>' +
+      '<p class="view-sub">"Saved" compares your actual spend against what it would have cost had every request used the large model. That is a modelled comparison, not an observed second run. Net figures subtract verification overhead and any subscription; gross is always labelled separately.</p>' +
+      '<div class="sec-h">Quality — sampled, with stated limits</div>' +
+      '<p class="view-sub">A fraction of small-model answers are checked off your response path against a large-model reference and scored by a judge panel. Any coverage guarantee is <b>marginal</b> — it holds across the population of sampled requests, <b>never per individual query</b> — and distribution shift can violate it. Below the minimum sample count we state "not yet a guarantee" rather than quoting a number.</p>' +
+    '</div>' +
+
+    '<div class="card" style="margin-top:18px"><h2>Security &amp; data handling</h2>' +
+      '<div class="sec-h">What we store</div>' +
+      '<p class="view-sub">Per request: timestamp, model, tier, token counts, cost, estimated energy and carbon, latency, and your session label if you send one.</p>' +
+      '<div class="sec-h">What we do not store by default</div>' +
+      '<p class="view-sub">Prompt and response <b>text is not retained</b> unless the operator explicitly enables it (<span class="mono">LOG_PROMPTS</span>, off by default). With it on, PII redaction can be enabled too.</p>' +
+      '<div class="sec-h">Isolation</div>' +
+      '<p class="view-sub">Every record, cache entry, budget and metric query is scoped to your workspace. Isolation is enforced in the application <b>and</b> at the database with PostgreSQL row-level security, so a cross-workspace read is refused even if application code has a bug.</p>' +
+      '<div class="sec-h">Keys</div>' +
+      '<p class="view-sub">Your provider key is encrypted at rest (AES-256-GCM) and never logged or returned to the browser. Joule API keys are stored only as SHA-256 hashes — shown once at creation, revocable and rotatable at any time.</p>' +
+      '<div class="sec-h">Certifications</div>' +
+      '<p class="view-sub">We hold <b>no</b> third-party security certification today. We do not display SOC 2, ISO 27001 or any similar badge, because we have not been audited for them. Formal certification is <b>on the roadmap</b>; until it exists we will not imply it.</p>' +
+      '<div class="sec-h">Availability</div>' +
+      '<p class="view-sub">Live component health is shown under Settings → Service status. We do not yet retain uptime history, so we publish no availability percentage — that too is on the roadmap.</p>' +
+    '</div>';
+}
 
 /* ---------- HOME: this-week summary (outcome language only) ---------- */
 async function paintWeek() {
   const wrap = gel("weekWrap"), host = gel("weekHost");
   if (!wrap || !host) return;
   let d; try { d = await (await fetch("/api/digest?days=7")).json(); } catch { wrap.style.display = "none"; return; }
+  if (!d || !d.saved || !d.quality) { wrap.style.display = "none"; return; } // unexpected shape -> hide, never throw
   wrap.style.display = "block";
   if (!d.hasTraffic) {
     host.innerHTML = '<div class="quiet">No requests this week. Your savings pick up again as soon as your traffic does.</div>';
@@ -1267,7 +1407,9 @@ async function paintValue() {
 
   // PROGRESSIVE DISCLOSURE: with no data, HOME collapses to ONE empty state with a single
   // call to action — never a stack of "No … yet" boxes, and never fabricated numbers.
-  if (r.empty) {
+  // Treat ANY unexpected shape (error body, 401, partial payload) as "no data" rather than
+  // throwing — a render error here would blank the whole page.
+  if (!r || r.empty || !r.lifetime || !r.net || !Array.isArray(r.series)) {
     host.innerHTML = "";
     const wk = gel("weekWrap"); if (wk) wk.style.display = "none";
     const z = gel("homeZero");
@@ -1367,6 +1509,18 @@ async function paintGetStarted() {
     '<button class="gs-btn" id="gsOpen" type="button">Continue setup</button></div>';
   $("gsOpen").onclick = () => openWizard(!s.providerKey ? 1 : !s.jouleKey ? 2 : 3);
 }
+
+/* ---------------------------------------------------------------------------
+   BOOT — must be the LAST thing in this script.
+   `function` declarations hoist, but `const`/`let` (VIEWS, CURRENT_VIEW, AUTH_CFG…)
+   do NOT: calling showView() above their declarations throws a temporal-dead-zone
+   ReferenceError that kills the whole script, leaving every [data-view] panel hidden
+   and the page blank. Keep all top-level invocation here, after every declaration.
+   --------------------------------------------------------------------------- */
+showView((location.hash || "#home").slice(1));   // real navigation, back/forward friendly
+loadConfig();                                     // populate the Settings form
+bootAuth();                                       // login screen vs. wizard vs. dashboard
+setInterval(() => { if (!AUTH_CFG.authRequired || ACCESS_TOKEN) refresh(); }, 4000);
 </script>
 </body>
 </html>

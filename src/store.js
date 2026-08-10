@@ -232,6 +232,24 @@ function accumulate(rs) {
 
 function aggregate(pred) { return accumulate(select(pred)); }
 
+/**
+ * Real end-to-end latency distribution from the log (ms), for the reliability evidence
+ * a buyer asks for: "how much does the proxy add?". These are MEASURED per-request
+ * durations, not estimates — and null when there's nothing to measure (never a fake 0).
+ * Cache/dry-run modes are separated out because they don't reflect live proxy overhead.
+ */
+function latencyStats(pred) {
+  const vals = select(pred).filter((r) => typeof r.latencyMs === "number").map((r) => r.latencyMs).sort((a, b) => a - b);
+  const live = select(pred).filter((r) => r.mode === "live" && typeof r.latencyMs === "number").map((r) => r.latencyMs).sort((a, b) => a - b);
+  const pct = (arr, p) => (arr.length ? arr[Math.min(arr.length - 1, Math.floor((p / 100) * arr.length))] : null);
+  const shape = (arr) => ({
+    n: arr.length,
+    p50: pct(arr, 50), p95: pct(arr, 95), p99: pct(arr, 99),
+    min: arr.length ? arr[0] : null, max: arr.length ? arr[arr.length - 1] : null
+  });
+  return { all: shape(vals), live: shape(live) };
+}
+
 // Per-model breakdown straight from the log: calls, tokens, cost, energy,
 // carbon, avg latency. Sorted by call count desc.
 function perModel(pred) {
@@ -358,7 +376,7 @@ function toCsv(pred) {
 
 module.exports = {
   init, ready, flush, close, recover, health, add, addVerification, all, tenants, clear, recent, toCsv,
-  aggregate, perModel, series, sessions, summary, dailyRollups,
+  aggregate, perModel, latencyStats, series, sessions, summary, dailyRollups,
   predicateFor, rangeCutoff,
   backend: () => backend
 };
