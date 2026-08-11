@@ -14,6 +14,9 @@ const TARGET = (process.argv[2] || process.env.DEMO_TARGET || "http://localhost:
 // Joule API key for an authenticated instance (Authorization: Bearer jk_live_...).
 // Omit for a local/dev instance running with AUTH_REQUIRED=false.
 const JOULE_KEY = process.env.JOULE_API_KEY || "";
+// Per-request economics come back on the response headers, so a run can report real
+// savings using ONLY the proxy surface — no dashboard credentials needed.
+const hdrTotals = { costUsd: 0, savedUsd: 0, energyWh: 0, carbonG: 0, savedCarbonG: 0, n: 0 };
 const AUTH_HEADERS = JOULE_KEY ? { authorization: "Bearer " + JOULE_KEY } : {};
 const COUNT = Number(process.argv[3] || process.env.DEMO_COUNT || 30);
 
@@ -63,6 +66,12 @@ async function sendOne(content) {
     body: JSON.stringify({ model: "auto", messages: [{ role: "user", content }] })
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const num = (h) => parseFloat(res.headers.get(h) || "0") || 0;
+  if (res.headers.get("x-joule-cost-usd")) {
+    hdrTotals.costUsd += num("x-joule-cost-usd"); hdrTotals.savedUsd += num("x-joule-saved-usd");
+    hdrTotals.energyWh += num("x-joule-energy-wh"); hdrTotals.carbonG += num("x-joule-co2-g");
+    hdrTotals.savedCarbonG += num("x-joule-saved-co2-g"); hdrTotals.n++;
+  }
   await res.json();
   return { tier: res.headers.get("x-joule-tier"), mode: res.headers.get("x-joule-mode") };
 }
@@ -89,6 +98,16 @@ async function main() {
   console.log(`  large:  ${large}`);
   console.log(`  cached: ${cache}`);
   console.log(`  errors: ${errors}`);
+  // Real economics for THIS run, summed from the x-joule-* response headers. Uses only the
+  // proxy surface, so it works on an authenticated instance without dashboard credentials.
+  if (hdrTotals.n) {
+    const usd = (x) => (x >= 1 ? "$" + x.toFixed(2) : "$" + x.toFixed(6));
+    console.log(`\n  metered from response headers (${hdrTotals.n} of ${prompts.length} requests carried metrics):`);
+    console.log(`    cost    ${usd(hdrTotals.costUsd)}    saved ${usd(hdrTotals.savedUsd)} vs always-large`);
+    console.log(`    energy  ${hdrTotals.energyWh.toFixed(3)} Wh`);
+    console.log(`    carbon  ${hdrTotals.carbonG.toFixed(3)} g    saved ${hdrTotals.savedCarbonG.toFixed(3)} g`);
+    console.log(`    (cost measured from token usage; energy and carbon estimated)`);
+  }
   console.log(`\nOpen ${TARGET}/ for the dashboard, or ${TARGET}/api/report for the report.`);
   if (errors) process.exitCode = 1;
 }
