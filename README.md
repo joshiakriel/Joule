@@ -424,6 +424,11 @@ missing or wrong, every `/api/*` call returns `401 authentication required` — 
 sign in (that's Supabase's own endpoint) but nothing in the dashboard will load. The UI now says
 so explicitly instead of showing a blank panel.
 
+**Token validation:** signature (HS256), expiry, and — once `SUPABASE_URL` is set — the
+`iss` and `aud` claims, so a correctly-signed token from a *different* Supabase project is
+refused. A verified user with no `tenant_id` claim gets their own workspace, derived
+deterministically from their Supabase user id (stable across restarts, nothing to persist).
+
 ⚠️ **HS256 only.** Joule verifies tokens with the shared JWT secret (HMAC-SHA256). Newer Supabase
 projects issue **asymmetric** (ES256/RS256) tokens signed by rotating JWKS keys — those will be
 rejected by this verifier and need a JWKS-based verifier instead. Check **Project Settings → API →

@@ -207,3 +207,51 @@ test("auth diagnostics report the precise reason and never leak the token or sec
   assert.ok(!dump.includes("aaa.bbb.ccc"), "the token is never included");
   assert.equal(tenancy.diagnoseJwt(null).reason, "no_authorization_header");
 });
+
+// ---- issuer / audience validation ----
+// A valid signature only proves "someone with this secret signed it" — not that OUR
+// project issued it. These lock the cross-project-reuse hole shut.
+const mkTok = (claims) => {
+  const h = b64({ alg: "HS256", typ: "JWT" }), p = b64(claims);
+  return `${h}.${p}.${crypto.createHmac("sha256", config.auth.jwtSecret).update(h + "." + p).digest("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
+};
+const baseClaims = (over = {}) => ({
+  iss: "https://ours.supabase.co/auth/v1", aud: "authenticated",
+  sub: "8f2b1c44-0000-4444-9999-1a2b3c4d5e6f", email: "you@company.com",
+  role: "authenticated", exp: Math.floor(Date.now() / 1000) + 3600, ...over
+});
+
+test("a correctly-signed token from ANOTHER Supabase project is rejected", async () => {
+  const saved = config.auth.supabaseUrl;
+  config.auth.supabaseUrl = "https://ours.supabase.co";
+  try {
+    // ours: accepted
+    assert.equal((await fetch(base + "/api/me", { headers: auth(mkTok(baseClaims())) })).status, 200, "our own project's token works");
+
+    // same secret, DIFFERENT project — signature is perfectly valid, issuer is not ours
+    const foreign = mkTok(baseClaims({ iss: "https://someone-else.supabase.co/auth/v1" }));
+    assert.equal((await fetch(base + "/api/me", { headers: auth(foreign) })).status, 401, "a foreign issuer is refused");
+    assert.equal(tenancy.diagnoseJwt("Bearer " + foreign).reason, "issuer_mismatch_token_from_a_different_project");
+
+    // wrong audience (e.g. a service token, not a user session)
+    const wrongAud = mkTok(baseClaims({ aud: "some-other-audience" }));
+    assert.equal((await fetch(base + "/api/me", { headers: auth(wrongAud) })).status, 401, "a token minted for another audience is refused");
+    assert.match(tenancy.diagnoseJwt("Bearer " + wrongAud).reason, /audience_mismatch/);
+
+    // an aud ARRAY containing ours is still valid (spec allows either shape)
+    assert.equal((await fetch(base + "/api/me", { headers: auth(mkTok(baseClaims({ aud: ["authenticated", "other"] }))) })).status, 200, "array aud accepted");
+
+    // a trailing slash on SUPABASE_URL must not break a legitimate token
+    config.auth.supabaseUrl = "https://ours.supabase.co/";
+    assert.equal((await fetch(base + "/api/me", { headers: auth(mkTok(baseClaims())) })).status, 200, "trailing slash tolerated");
+  } finally { config.auth.supabaseUrl = saved; }
+});
+
+test("iss/aud are only enforced when SUPABASE_URL is configured (dev stays usable)", async () => {
+  const saved = config.auth.supabaseUrl;
+  config.auth.supabaseUrl = "";                      // unconfigured => nothing to compare against
+  try {
+    const noIss = mkTok({ sub: "8f2b1c44-0000-4444-9999-1a2b3c4d5e6f", exp: Math.floor(Date.now() / 1000) + 3600 });
+    assert.equal((await fetch(base + "/api/me", { headers: auth(noIss) })).status, 200, "a token without iss/aud still works when we have no expectation");
+  } finally { config.auth.supabaseUrl = saved; }
+});

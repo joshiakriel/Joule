@@ -82,7 +82,32 @@ function verifyJwt(token) {
   const got = b64urlToBuf(parts[2]);
   if (expected.length !== got.length || !crypto.timingSafeEqual(expected, got)) return null;
   if (payload.exp && Date.now() / 1000 > payload.exp) return null; // expired
+  if (!checkIssuerAudience(payload)) return null;                  // wrong project / wrong audience
   return payload;
+}
+
+/**
+ * Issuer + audience validation. A valid signature alone only proves "someone holding this
+ * secret signed this" — it does NOT prove the token came from OUR project or was minted
+ * for US. Without this, a genuine session token from any other Supabase project that
+ * happened to share the secret would be accepted.
+ *
+ * Enforced ONLY when SUPABASE_URL is configured, because that is the one thing that tells
+ * us which issuer to expect. Unconfigured (local dev, offline tests) => nothing to compare
+ * against, so the check is skipped rather than guessed at.
+ */
+function expectedIssuer() {
+  const base = String(config.auth.supabaseUrl || "").trim().replace(/\/+$/, "");
+  return base ? base + "/auth/v1" : null;
+}
+function checkIssuerAudience(payload) {
+  const iss = expectedIssuer();
+  if (!iss) return true;                                   // not configured — nothing to verify against
+  if (payload.iss !== iss) return false;                   // minted by a different project
+  const want = config.auth.jwtAudience;
+  if (!want) return true;
+  const aud = payload.aud;                                 // `aud` may be a string or an array
+  return Array.isArray(aud) ? aud.includes(want) : aud === want;
 }
 /**
  * A user's own workspace id, derived DETERMINISTICALLY from their Supabase user id.
@@ -182,6 +207,9 @@ function diagnoseJwt(authHeader) {
     return out;
   }
   if (payload.exp && Date.now() / 1000 > payload.exp) { out.reason = "token_expired"; return out; }
+  const wantIss = expectedIssuer();
+  if (wantIss && payload.iss !== wantIss) { out.reason = "issuer_mismatch_token_from_a_different_project"; out.expectedIss = wantIss; return out; }
+  if (wantIss && !checkIssuerAudience(payload)) { out.reason = "audience_mismatch_expected_" + config.auth.jwtAudience; return out; }
 
   // signature is GOOD — can we resolve a tenant from it?
   const tenantId = (payload.app_metadata && payload.app_metadata.tenant_id) || payload.tenant_id || usersById.get(payload.sub) || tenantIdForUser(payload.sub);

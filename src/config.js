@@ -103,6 +103,9 @@ const config = {
     // nothing without a valid session). The SERVICE-ROLE key must never appear client-side.
     supabaseUrl: process.env.SUPABASE_URL || "",
     supabaseAnonKey: process.env.SUPABASE_ANON_KEY || "",
+    // Expected `aud` on a Supabase session token. Only enforced when SUPABASE_URL is set
+    // (i.e. we actually know which project should have issued the token).
+    jwtAudience: process.env.SUPABASE_JWT_AUD || "authenticated",
     /**
      * OPERATORS — the people who run this deployment. Only they may edit
      * deployment-wide settings (models, grid region, routing, dry-run) via /api/config.
