@@ -255,3 +255,63 @@ test("iss/aud are only enforced when SUPABASE_URL is configured (dev stays usabl
     assert.equal((await fetch(base + "/api/me", { headers: auth(noIss) })).status, 200, "a token without iss/aud still works when we have no expectation");
   } finally { config.auth.supabaseUrl = saved; }
 });
+
+// ---- identity durability ----
+// Regression guard: api_keys/tenant_secrets existed only in the migration — nothing read or
+// wrote them — so every minted key and every encrypted provider key died on restart.
+test("minted keys and provider secrets SURVIVE a restart (hydrated from the durable store)", async () => {
+  const rows = { tenants: [], apiKeys: [], secrets: [], users: [] };
+  // a fake durable handle standing in for pgstore: records the write-throughs, replays them back
+  const fake = {
+    loadIdentity: async () => rows,
+    persistTenant: (id, name) => rows.tenants.push({ id, name }),
+    persistUser: (id, tenant_id, email) => rows.users.push({ id, tenant_id, email }),
+    persistApiKey: (rec, key_hash) => rows.apiKeys.push({ id: rec.id, tenant_id: rec.tenantId, key_hash, last4: rec.last4, name: rec.name, revoked: false, created_at: new Date() }),
+    persistRevokeKey: (id) => { const k = rows.apiKeys.find((x) => x.id === id); if (k) k.revoked = true; },
+    persistTenantSecret: (tenant_id, blob) => { rows.secrets = rows.secrets.filter((s) => s.tenant_id !== tenant_id); if (blob) rows.secrets.push({ tenant_id, upstream_key_enc: blob }); }
+  };
+  try {
+    tenancy.usePersistence(fake);
+    const T = tenancy.createTenant("durable-co");
+    const minted = tenancy.mintKey(T.id, "prod");
+    tenancy.setUpstreamKey(T.id, "sk-provider-value");
+    assert.equal(tenancy.resolveFromApiKey("Bearer " + minted.key).id, T.id, "key works before restart");
+
+    // --- simulate a process restart: wipe the in-memory cache, hydrate from the store ---
+    tenancy.reset();
+    assert.equal(tenancy.resolveFromApiKey("Bearer " + minted.key), null, "cache really was cleared");
+    tenancy.usePersistence(fake);
+    const h = await tenancy.hydrate();
+    assert.ok(h.keys >= 1 && h.secrets >= 1, "identity was loaded back");
+
+    assert.equal(tenancy.resolveFromApiKey("Bearer " + minted.key).id, T.id, "the SAME key still authenticates after a restart");
+    assert.equal(tenancy.getUpstreamKey(T.id), "sk-provider-value", "the encrypted provider key decrypts after a restart");
+    assert.equal(tenancy.listKeys(T.id)[0].last4, minted.last4, "key metadata survived");
+
+    // revocation is durable too — a revoked key must not come back to life on restart
+    tenancy.revokeKey(minted.id);
+    tenancy.reset(); tenancy.usePersistence(fake); await tenancy.hydrate();
+    assert.equal(tenancy.resolveFromApiKey("Bearer " + minted.key), null, "a revoked key stays revoked across a restart");
+  } finally { tenancy.usePersistence(null); tenancy.reset(); }
+});
+
+test("the provider key is persisted ENCRYPTED, never as plaintext", () => {
+  let stored = null;
+  try {
+    tenancy.usePersistence({ persistTenantSecret: (_t, blob) => { stored = blob; }, persistTenant() {}, persistApiKey() {}, persistUser() {} });
+    const T = tenancy.createTenant("enc");
+    tenancy.setUpstreamKey(T.id, "sk-plaintext-must-not-appear");
+    assert.ok(stored && stored.iv && stored.tag && stored.data, "an AES-256-GCM blob is what gets written");
+    assert.ok(!JSON.stringify(stored).includes("sk-plaintext-must-not-appear"), "plaintext never reaches the database");
+  } finally { tenancy.usePersistence(null); tenancy.reset(); }
+});
+
+test("identity persistence failures never throw into a request", () => {
+  try {
+    tenancy.usePersistence({ persistTenant() { throw new Error("db down"); }, persistApiKey() { throw new Error("db down"); } });
+    const T = tenancy.createTenant("outage");           // must not throw
+    const k = tenancy.mintKey(T.id, "k");               // must not throw
+    assert.ok(k.key, "the key is still minted and usable in-memory during a DB outage");
+    assert.equal(tenancy.resolveFromApiKey("Bearer " + k.key).id, T.id);
+  } finally { tenancy.usePersistence(null); tenancy.reset(); }
+});

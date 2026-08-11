@@ -13,9 +13,10 @@ const config = require("./config");
  *    asymmetric/JWKS verifier (SSO/OIDC) can be added later.
  *  - Per-tenant upstream provider key: encrypted at rest (AES-256-GCM), never logged.
  *
- * Registries are in-memory here (authoritative for the memory backend + tests); the
- * Postgres backend persists the same rows in tenant-scoped tables (migrations/002).
- * Secrets are NEVER logged or returned after creation.
+ * Registries are an in-memory CACHE for fast synchronous lookup on the hot path. On the
+ * postgres backend they are hydrated from tenants/users/api_keys/tenant_secrets at boot
+ * and written through on every change, so keys and provider secrets SURVIVE A RESTART.
+ * On the memory backend they are in-process only. Secrets are NEVER logged or returned.
  */
 
 const DEFAULT_TENANT_ID = config.auth.defaultTenantId;
@@ -34,12 +35,48 @@ const sha256 = (s) => crypto.createHash("sha256").update(String(s)).digest("hex"
 const b64url = (buf) => Buffer.from(buf).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const b64urlToBuf = (s) => Buffer.from(String(s).replace(/-/g, "+").replace(/_/g, "/"), "base64");
 
+/**
+ * DURABILITY. The maps above are a fast, synchronous cache — the /v1 hot path resolves a
+ * key with a map lookup and never touches the DB. They are HYDRATED from Postgres at boot
+ * and kept current by write-throughs, so a minted Joule key and a tenant's encrypted
+ * provider key SURVIVE A RESTART. Without this they lived only in memory and were
+ * destroyed on every redeploy (and on any idle spin-down).
+ *
+ * Writes are fire-and-forget through pgstore's off-path queue: a DB outage buffers them
+ * and replays on recovery; nothing here can throw into a request. On the memory backend
+ * `durable` stays null and behaviour is exactly as before.
+ */
+let durable = null;
+function usePersistence(handle) { durable = handle || null; }
+const persist = (fn, ...args) => { try { if (durable && durable[fn]) durable[fn](...args); } catch (e) { console.error("identity persist error:", e && e.message); } };
+
+// Load tenants / users / api keys / provider secrets back into the cache at boot.
+async function hydrate() {
+  if (!durable || !durable.loadIdentity) return { tenants: 0, keys: 0, secrets: 0, users: 0 };
+  const d = await durable.loadIdentity();
+  for (const t of d.tenants) if (!tenants.has(t.id)) tenants.set(t.id, { id: t.id, name: t.name || t.id, createdAt: new Date().toISOString() });
+  for (const k of d.apiKeys) keysByHash.set(k.key_hash, { id: k.id, tenantId: k.tenant_id, last4: k.last4, name: k.name, createdAt: k.created_at ? new Date(k.created_at).toISOString() : new Date().toISOString(), revoked: k.revoked === true });
+  for (const s of d.secrets) if (s.upstream_key_enc) secretsByTenant.set(s.tenant_id, s.upstream_key_enc);
+  for (const u of d.users) usersById.set(u.id, u.tenant_id);
+  return { tenants: d.tenants.length, keys: d.apiKeys.length, secrets: d.secrets.length, users: d.users.length };
+}
+
 // ---- tenants + users ----
-function ensureTenant(id, name) { if (!tenants.has(id)) tenants.set(id, { id, name: name || id, createdAt: new Date().toISOString() }); return tenants.get(id); }
+function ensureTenant(id, name) {
+  if (!tenants.has(id)) {
+    tenants.set(id, { id, name: name || id, createdAt: new Date().toISOString() });
+    persist("persistTenant", id, name || String(id));
+  }
+  return tenants.get(id);
+}
 function createTenant(name) { const id = crypto.randomUUID(); return ensureTenant(id, name || "tenant"); }
 function getTenant(id) { return tenants.get(id) || null; }
 const defaultTenant = () => ({ id: DEFAULT_TENANT_ID });
-function attachUser(userId, tenantId) { usersById.set(userId, tenantId); return { userId, tenantId }; }
+function attachUser(userId, tenantId, email) {
+  usersById.set(userId, tenantId);
+  persist("persistUser", userId, tenantId, email || null);
+  return { userId, tenantId };
+}
 
 // ---- Joule API keys ----
 // Mint a key: returns the PLAINTEXT once; only the hash is retained.
@@ -50,9 +87,13 @@ function mintKey(tenantId, name) {
   const hash = sha256(key);
   const rec = { id: "ak_" + crypto.randomBytes(6).toString("hex"), tenantId, last4: secret.slice(-4), name: name || "default", createdAt: new Date().toISOString(), revoked: false };
   keysByHash.set(hash, rec);
+  persist("persistApiKey", rec, hash);   // survives a restart
   return { key, id: rec.id, last4: rec.last4, tenantId, name: rec.name }; // `key` shown ONCE
 }
-function revokeKey(keyId) { for (const rec of keysByHash.values()) if (rec.id === keyId) { rec.revoked = true; return true; } return false; }
+function revokeKey(keyId) {
+  for (const rec of keysByHash.values()) if (rec.id === keyId) { rec.revoked = true; persist("persistRevokeKey", keyId, rec.tenantId); return true; }
+  return false;
+}
 function listKeys(tenantId) { return [...keysByHash.values()].filter((r) => r.tenantId === tenantId).map((r) => ({ id: r.id, last4: r.last4, name: r.name, createdAt: r.createdAt, revoked: r.revoked })); }
 
 const bearer = (authHeader) => { const m = /^Bearer\s+(.+)$/i.exec(String(authHeader || "").trim()); return m ? m[1].trim() : null; };
@@ -140,7 +181,7 @@ function resolveFromJwt(authHeader) {
     || tenantIdForUser(payload.sub);
   if (!tenantId) return null;
   ensureTenant(tenantId, payload.email || tenantId);
-  if (payload.sub && !usersById.has(payload.sub)) usersById.set(payload.sub, tenantId); // remember for this process
+  if (payload.sub && !usersById.has(payload.sub)) attachUser(payload.sub, tenantId, payload.email); // remembered durably
   // `role` is carried through so the server can recognise an operator from a role claim
   // (Supabase projects commonly put it at the top level or under app_metadata).
   const role = payload.role || (payload.app_metadata && payload.app_metadata.role) || null;
@@ -225,11 +266,13 @@ function encKey() {
 }
 function setUpstreamKey(tenantId, plaintext) {
   ensureTenant(tenantId, tenantId);
-  if (!plaintext) { secretsByTenant.delete(tenantId); return; }
+  if (!plaintext) { secretsByTenant.delete(tenantId); persist("persistTenantSecret", tenantId, null); return; }
   const iv = crypto.randomBytes(12);
   const c = crypto.createCipheriv("aes-256-gcm", encKey(), iv);
   const enc = Buffer.concat([c.update(String(plaintext), "utf8"), c.final()]);
-  secretsByTenant.set(tenantId, { iv: iv.toString("hex"), tag: c.getAuthTag().toString("hex"), data: enc.toString("hex") });
+  const blob = { iv: iv.toString("hex"), tag: c.getAuthTag().toString("hex"), data: enc.toString("hex") };
+  secretsByTenant.set(tenantId, blob);
+  persist("persistTenantSecret", tenantId, blob);   // encrypted blob only — never plaintext
 }
 function getUpstreamKey(tenantId) {
   const s = secretsByTenant.get(tenantId);
@@ -246,5 +289,5 @@ reset();
 module.exports = {
   DEFAULT_TENANT_ID, reset, ensureTenant, createTenant, getTenant, defaultTenant, attachUser,
   mintKey, revokeKey, listKeys, resolveFromApiKey, resolveFromJwt, verifyJwt,
-  setUpstreamKey, getUpstreamKey, diagnoseJwt, tenantIdForUser, _sha256: sha256
+  setUpstreamKey, getUpstreamKey, diagnoseJwt, tenantIdForUser, usePersistence, hydrate, _sha256: sha256
 };

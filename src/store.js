@@ -378,5 +378,7 @@ module.exports = {
   init, ready, flush, close, recover, health, add, addVerification, all, tenants, clear, recent, toCsv,
   aggregate, perModel, latencyStats, series, sessions, summary, dailyRollups,
   predicateFor, rangeCutoff,
-  backend: () => backend
+  backend: () => backend,
+  // the durable handle, so identity (tenancy.js) can share this pool. null on memory backend.
+  durable: () => pg
 };

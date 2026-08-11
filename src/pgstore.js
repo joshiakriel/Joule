@@ -116,11 +116,53 @@ function create({ databaseUrl, ssl, poolMax = 5, connectTimeoutMs = 5000, statem
     }
   }
 
+  // ---- identity persistence (tenants / users / api keys / provider secrets) ----
+  // Read ACROSS tenants at boot via the SECURITY DEFINER loaders, then cached in memory so
+  // the hot path stays a synchronous map lookup with no per-request DB hit. Writes are
+  // enqueued off-path like every other write: an outage buffers them, never breaks a response.
+  async function loadIdentity() {
+    const [tenants, apiKeys, secrets, users] = await Promise.all([
+      pool.query("SELECT id, name FROM app_load_tenants()"),
+      pool.query("SELECT id, tenant_id, key_hash, last4, name, revoked, created_at FROM app_load_api_keys()"),
+      pool.query("SELECT tenant_id, upstream_key_enc FROM app_load_tenant_secrets()"),
+      pool.query("SELECT id, tenant_id, email FROM app_load_users()")
+    ]);
+    return { tenants: tenants.rows, apiKeys: apiKeys.rows, secrets: secrets.rows, users: users.rows };
+  }
+
+  // `tenants` has no tenant_id column and no RLS policy, so it needs no GUC.
+  function persistTenant(id, name) {
+    enqueue({ label: "tenant", sql: "INSERT INTO tenants (id, name) VALUES ($1,$2) ON CONFLICT (id) DO NOTHING", params: [id, name || String(id)] });
+  }
+  function persistUser(id, tenantId, email) {
+    enqueue({ label: "user", tenant: tenantId,
+      sql: "INSERT INTO users (id, tenant_id, email) VALUES ($1,$2,$3) ON CONFLICT (id) DO UPDATE SET tenant_id = EXCLUDED.tenant_id",
+      params: [id, tenantId, email || null] });
+  }
+  function persistApiKey(rec, keyHash) {
+    enqueue({ label: "apiKey", tenant: rec.tenantId,
+      sql: `INSERT INTO api_keys (id, tenant_id, key_hash, last4, name, revoked)
+            VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO NOTHING`,
+      params: [rec.id, rec.tenantId, keyHash, rec.last4 || null, rec.name || null, rec.revoked === true] });
+  }
+  function persistRevokeKey(keyId, tenantId) {
+    enqueue({ label: "revokeKey", tenant: tenantId, sql: "UPDATE api_keys SET revoked = true WHERE id = $1", params: [keyId] });
+  }
+  // the provider key is persisted ONLY as its AES-256-GCM blob {iv,tag,data} — never plaintext
+  function persistTenantSecret(tenantId, encBlob) {
+    enqueue({ label: "tenantSecret", tenant: tenantId,
+      sql: `INSERT INTO tenant_secrets (tenant_id, upstream_key_enc, updated_at)
+            VALUES ($1,$2::jsonb,now()) ON CONFLICT (tenant_id) DO UPDATE SET upstream_key_enc = EXCLUDED.upstream_key_enc, updated_at = now()`,
+      params: [tenantId, encBlob == null ? null : JSON.stringify(encBlob)] });
+  }
+
   const flush = () => queue;
   const close = async () => { await queue.catch(() => {}); if (!_pool) await pool.end(); };
   const health = () => ({ backend: "postgres", status: degraded ? "degraded" : "ok", pendingWrites: pending.length, droppedWrites: dropped });
 
-  return { ensureSchema, load, persistAdd, persistVerification, persistClear, persistClearTenant, recover, flush, close, health, isDegraded: () => degraded };
+  return { ensureSchema, load, persistAdd, persistVerification, persistClear, persistClearTenant,
+    loadIdentity, persistTenant, persistUser, persistApiKey, persistRevokeKey, persistTenantSecret,
+    recover, flush, close, health, isDegraded: () => degraded };
 }
 
 module.exports = { create };
