@@ -20,6 +20,14 @@
  */
 
 const TARGET = (process.argv[2] || process.env.DEMO_TARGET || "http://localhost:3000").replace(/\/$/, "");
+// Joule API key for an authenticated instance (Authorization: Bearer jk_live_...).
+// Omit for a local/dev instance running with AUTH_REQUIRED=false.
+const JOULE_KEY = process.env.JOULE_API_KEY || "";
+const AUTH_HEADERS = JOULE_KEY ? { authorization: "Bearer " + JOULE_KEY } : {};
+// /api/* is the DASHBOARD surface and needs a Supabase JWT, not the proxy key. Optional:
+// without it the run still works, we just skip the summary rather than failing.
+const DASH_TOKEN = process.env.JOULE_DASH_TOKEN || "";
+const DASH_HEADERS = DASH_TOKEN ? { authorization: "Bearer " + DASH_TOKEN } : {};
 // Tag every call in this run with one session id so the whole agent run shows up
 // as a single labelled session in the dashboard ("one agent run = N calls, X g CO2").
 const SESSION = "triage-agent-" + new Date().toISOString().replace(/[:.]/g, "-");
@@ -43,7 +51,7 @@ const TICKETS = [
 async function callJoule(content) {
   const res = await fetch(TARGET + "/v1/chat/completions", {
     method: "POST",
-    headers: { "content-type": "application/json", "x-joule-session": SESSION },
+    headers: { "content-type": "application/json", "x-joule-session": SESSION, ...AUTH_HEADERS },
     body: JSON.stringify({ model: "auto", messages: [{ role: "user", content }] })
   });
   if (!res.ok) {
@@ -73,8 +81,8 @@ const g = (x) => (x >= 1000 ? (x / 1000).toFixed(2) + " kg" : x.toFixed(2) + " g
 const pad = (s, n) => String(s).padEnd(n);
 
 async function stats() {
-  const r = await fetch(TARGET + "/api/stats");
-  if (!r.ok) throw new Error(`/api/stats HTTP ${r.status}`);
+  const r = await fetch(TARGET + "/api/stats", { headers: DASH_HEADERS });
+  if (!r.ok) return null;   // no dashboard token (or not authorised) — summary is optional
   return (await r.json()).totals;
 }
 
@@ -110,6 +118,13 @@ async function main() {
   }
 
   const after = await stats();
+  // Without a dashboard token the agent work still ran — we simply cannot read the
+  // server totals to summarise it, so say so plainly instead of inventing numbers.
+  if (!before || !after) {
+    console.log("\n  Agent run complete. Set JOULE_DASH_TOKEN (a dashboard JWT) to print the savings summary,");
+    console.log("  or open the dashboard to see this run metered.\n");
+    return;
+  }
   // Deltas attributable to THIS run — derived straight from /api/stats, so the
   // printed numbers match the server's totals by construction.
   const d = (path) => path(after) - path(before);
@@ -135,7 +150,7 @@ async function main() {
 
   // The whole run is one labelled session on the server — fetch it back to prove it.
   try {
-    const sum = await (await fetch(TARGET + "/api/summary?range=1h")).json();
+    const sum = await (await fetch(TARGET + "/api/summary?range=1h", { headers: DASH_HEADERS })).json();
     const sess = (sum.sessions || []).find((s) => s.id === SESSION);
     if (sess) {
       const secs = (sess.durationMs / 1000).toFixed(1);

@@ -11,6 +11,10 @@
  */
 
 const TARGET = (process.argv[2] || process.env.DEMO_TARGET || "http://localhost:3000").replace(/\/$/, "");
+// Joule API key for an authenticated instance (Authorization: Bearer jk_live_...).
+// Omit for a local/dev instance running with AUTH_REQUIRED=false.
+const JOULE_KEY = process.env.JOULE_API_KEY || "";
+const AUTH_HEADERS = JOULE_KEY ? { authorization: "Bearer " + JOULE_KEY } : {};
 const COUNT = Number(process.argv[3] || process.env.DEMO_COUNT || 30);
 
 // Templates × topics => MOSTLY DISTINCT prompts, so the mix reflects real traffic
@@ -55,7 +59,7 @@ function buildPrompts(n) {
 async function sendOne(content) {
   const res = await fetch(TARGET + "/v1/chat/completions", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...AUTH_HEADERS },
     body: JSON.stringify({ model: "auto", messages: [{ role: "user", content }] })
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
