@@ -503,6 +503,95 @@ p,li,.cfg-lead,.view-sub,.hero-l,.hero-since,.kpi-s,.wk-s,.empty-log,.reason,.no
 .advisory{border-left:2px solid var(--cyan)}
 .advisory h3{font-size:14px;font-weight:650;margin:0 0 6px;letter-spacing:-.1px;text-transform:none}
 .advisory .rec{margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:13.5px;color:var(--muted2)}
+
+/* ══════════ VISUAL POLISH — layout, type, components, motion ══════════
+   Presentation only: no computed value, API shape or disclosure is altered. */
+:root{ --maxw:1200px; --gutter:40px; --muted2:#B0C4BD; --sp-sec:32px; --sp-card:20px; }
+
+/* 1 · CONTAINER + RHYTHM — content must never touch the viewport edge */
+.content{max-width:var(--maxw);padding:36px var(--gutter) 80px;margin:0 auto;width:100%}
+.content > * + *{margin-top:var(--sp-sec)}
+.card + .card,.kpis + .card,.card + .kpis{margin-top:var(--sp-card)}
+.card{padding:24px 26px}
+.topbar{padding:20px var(--gutter)}
+@media (max-width:900px){ :root{--gutter:24px} .content{padding:24px var(--gutter) 64px} }
+@media (max-width:560px){ :root{--gutter:16px;--sp-sec:24px} }
+
+/* status pills: aligned right of the title, even gaps, never crowding the edge */
+.topbar .status{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;align-items:center}
+.pill{display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border-radius:999px;
+  border:1px solid var(--line);background:rgba(255,255,255,.03);font-size:11.5px;
+  font-family:var(--sans);letter-spacing:.2px;white-space:nowrap;margin:0}
+.pill .d{width:7px;height:7px;border-radius:50%;background:var(--cyan);flex:0 0 7px}
+.pill.warn .d{background:var(--amber)}
+/* the LIVE dot breathes — subtle proof the page is current */
+.pill.ok .d{animation:pulse 2.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(51,227,199,.45)}50%{opacity:.65;box-shadow:0 0 0 5px rgba(51,227,199,0)}}
+
+/* 2 · 12-col responsive grid: KPIs 4 / 2 / 1 with even gaps */
+.kpis,.week{display:grid;grid-template-columns:repeat(12,1fr);gap:20px}
+.kpis > *,.week > *{grid-column:span 3}
+@media (max-width:1024px){ .kpis > *,.week > *{grid-column:span 6} }
+@media (max-width:560px){ .kpis > *,.week > *{grid-column:span 12} }
+
+/* 3 · TYPE — sans everywhere except numbers, keys and code */
+.netline,.lg,.tips,.note,.reason,.empty-log,.decision,.cfg-lead,.wk-s,.kpi-s,.hero-l,
+.hero-since,.hq-l,.lev-nm,.risk,.chip-m,.mini-empty,.advisory,.advisory .rec,
+td,th,label,.cfg-lbl,.an-s,.arch-grid,.chart-lgnd,.chart-x,.copy,.meter-lbl,.pill,
+.qhold,.savechip,.sess-badge,.tb-count,.tpill{ font-family:var(--sans) !important; }
+/* `.mono` and the numeric/code classes are deliberately EXCLUDED above — monospace stays
+   reserved for figures, keys/IDs and code. These labels were also ~10px; lift to legible. */
+.meter-lbl,.chart-lgnd,.chart-x,.savechip,.qhold,.tb-count,.tpill,.sess-badge{font-size:11.5px}
+.arch-grid,.an-s{font-size:12px}
+.netline{font-size:13px;line-height:1.6;color:var(--muted2)}   /* was 10.5px JetBrains Mono */
+.lg{font-size:12px}
+.empty-log{font-style:normal;font-size:13.5px}
+.hero-n{font-size:60px;line-height:1.02;letter-spacing:-2.4px}
+.kpi-n{font-size:30px}
+.wk-n,.hq-n{font-size:28px}
+body,.card p,td{line-height:1.5}
+.muted,.reason,.kpi-s,.wk-s{color:var(--muted2)}
+/* figures stay tabular so columns align */
+.kpi-n,.hero-n,.wk-n,.hq-n,.num,.lev-amt,td.num,.mono{font-variant-numeric:tabular-nums}
+
+/* 4 · CARDS + TABLES */
+.card,.kpi,.val,.hero,.zero{border-radius:16px;border:1px solid rgba(255,255,255,.06);box-shadow:0 2px 24px rgba(0,0,0,.35)}
+.kpi,.card.lift{transition:transform 150ms ease,border-color 150ms ease}
+.kpi:hover,.card.lift:hover{transform:translateY(-2px);border-color:rgba(255,255,255,.12)}
+.tbl-scroll{overflow-x:auto;border-radius:12px;border:1px solid var(--line)}
+.card table{width:100%;border-collapse:collapse;font-size:13.5px}
+.card table thead th{position:sticky;top:0;background:var(--panel);z-index:1;
+  padding:12px 14px;font-size:10.5px;text-transform:uppercase;letter-spacing:1.4px;color:var(--muted2);
+  border-bottom:1px solid var(--line2);text-align:left}
+.card table td{padding:0 14px;height:48px;border-bottom:1px solid rgba(255,255,255,.045)}
+.card table tbody tr:last-child td{border-bottom:0}
+.card table tbody tr{transition:background 150ms ease}
+.card table tbody tr:hover td{background:rgba(255,255,255,.035)}
+.card table th.num,.card table td.num{text-align:right;font-variant-numeric:tabular-nums}
+
+/* 5 · BUTTONS + FILTER PILLS — one clear hierarchy */
+button,.tab,.gs-btn,.tb-danger,a.tab{font-family:var(--sans);border-radius:10px;
+  transition:background 150ms ease,color 150ms ease,border-color 150ms ease,transform 150ms ease}
+.gs-btn,.btn-primary,.zero button,#pcSave,#cfg-save,#newKeyBtn{
+  background:var(--cyan);color:#04211C;border:0;font-weight:650;font-size:13.5px;padding:11px 20px;cursor:pointer}
+.gs-btn:hover,.btn-primary:hover,.zero button:hover{transform:translateY(-1px);opacity:.92}
+.tab,a.tab{background:transparent;border:1px solid var(--line2);color:var(--muted2);
+  font-size:13px;padding:10px 16px;cursor:pointer;text-decoration:none;
+  display:inline-flex;align-items:center;justify-content:center}
+.tab:hover,a.tab:hover{color:var(--cyan);border-color:var(--cyan)}
+.tab.on{color:var(--cyan);border-color:var(--cyan);background:var(--cyan-dim)}
+.seg{display:inline-flex;gap:6px}
+.seg button{height:34px;padding:0 14px;font-size:12.5px;border:1px solid var(--line2);
+  background:transparent;color:var(--muted2);border-radius:8px;cursor:pointer}
+.seg button:hover{color:var(--text)}
+.seg button.on{background:var(--cyan-dim);color:var(--cyan);border-color:var(--cyan)}
+.toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.toolbar select,.tb-search{height:34px;border-radius:8px;border:1px solid var(--line2);
+  background:#0D1917;color:var(--text);font-size:12.5px;padding:0 10px;font-family:var(--sans)}
+
+/* 6 · CHART AXES */
+.axis text,.ax-t{font-family:var(--sans);font-size:10px;fill:var(--muted2);opacity:.85}
+.axis line{stroke:rgba(255,255,255,.05)}
 </style>
 </head>
 <body>
@@ -1249,7 +1338,7 @@ function renderChart(series, win) {
 
 function renderLog(recent) {
   const box = $("logbox");
-  if (!recent.length) { box.innerHTML = '<div class="empty-log">No requests match this filter.</div>'; return; }
+  if (!recent.length) { box.innerHTML = '<div class="mini-empty"><span class="me-i">○</span><span>No requests match this filter.</span></div>'; return; }
   box.innerHTML = '<div class="tbl-scroll"><table><thead><tr><th>When</th><th>Tier</th><th>Model</th><th>Session</th><th class="num">Tokens</th><th class="num">Cost</th><th class="num">Energy</th><th class="num">CO₂</th><th class="num">Saved</th><th class="num">Quality</th></tr></thead><tbody>'+
     recent.map(r => {
       const vq = r.verification ? r.verification.qualityScore : null;
@@ -1271,7 +1360,7 @@ function renderLog(recent) {
 
 function renderSessions(sessions) {
   const box = $("sessBox");
-  if (!sessions.length) { box.innerHTML = '<div class="empty-log">No sessions yet.</div>'; return; }
+  if (!sessions.length) { box.innerHTML = '<div class="mini-empty"><span class="me-i">○</span><span>No agent sessions yet — tag requests with X-Joule-Session to group them.</span></div>'; return; }
   box.innerHTML = '<div class="tbl-scroll"><table><thead><tr><th>Session</th><th class="num">Calls</th><th class="num">S/L</th><th class="num">Tokens</th><th class="num">Energy</th><th class="num">CO₂</th><th class="num">Saved CO₂</th><th class="num">Saved%</th><th class="num">Quality</th><th class="num">Duration</th><th>When</th></tr></thead><tbody>'+
     sessions.map(s => {
       const badge = s.tagged ? '<span class="sess-badge agent">agent</span>' : '<span class="sess-badge adhoc">ad-hoc</span>';
@@ -1348,7 +1437,7 @@ function renderCache(c, batch, reasoning, advisory) {
   const reasoningLine = (rz && rz.requests > 0)
     ? '<div class="netline" style="margin-top:6px">reasoning control <span class="muted">(thinking-budget cap' + (rz.downgrades ? ' + ' + rz.downgrades + ' downgrade' + (rz.downgrades === 1 ? '' : 's') : '') + ')</span> · ' + rz.requests + ' request' + (rz.requests === 1 ? '' : 's') + ' · ' + rz.reasoningTokens + ' thinking tokens · saved <b class="cyan">' + fmtUsd(rz.savedUsd) + '</b> <span class="muted">(est · ' + rz.savedTokens + ' tokens)</span></div>'
     : '';
-  if (!c || !c.requests) { box.innerHTML = ((batchLine + reasoningLine + advLine) || '<div class="empty-log">No requests yet.</div>'); return; }
+  if (!c || !c.requests) { box.innerHTML = ((batchLine + reasoningLine + advLine) || '<div class="mini-empty"><span class="me-i">○</span><span>No requests yet — send one to see this.</span></div>'); return; }
   const pc = c.prefixCache || { netSavedUsd: 0, savedUsd: 0, writePremiumUsd: 0 };
   const pct = (x) => Math.round(x * 100) + "%";
   let html = '<div class="netline">' +
@@ -1384,7 +1473,7 @@ function renderCache(c, batch, reasoning, advisory) {
 
 function renderModels(perModel) {
   const box = $("modelBox");
-  if (!perModel.length) { box.innerHTML = '<div class="empty-log">No requests match this filter.</div>'; return; }
+  if (!perModel.length) { box.innerHTML = '<div class="mini-empty"><span class="me-i">○</span><span>No requests match this filter.</span></div>'; return; }
   box.innerHTML = '<div class="tbl-scroll"><table><thead><tr><th>Model</th><th>Tier</th><th class="num">Calls</th><th class="num">Tokens</th><th class="num">Cost</th><th class="num">Energy</th><th class="num">CO₂</th><th class="num">Avg latency</th></tr></thead><tbody>'+
     perModel.map(m =>
       '<tr><td class="mono">'+esc(m.model)+'</td>'+
@@ -1850,8 +1939,19 @@ async function paintValue() {
   let grid = "";
   for (let i = 0; i <= 4; i++) {
     const yy = padT + (i / 4) * (h - padT - padB);
+    const val = hi - (i / 4) * (hi - lo);          // label the value this line represents
     grid += '<line x1="' + padL + '" y1="' + yy.toFixed(1) + '" x2="' + (w - padR) + '" y2="' + yy.toFixed(1) +
-            '" stroke="rgba(255,255,255,.045)" stroke-width="1"/>';
+            '" stroke="rgba(255,255,255,.045)" stroke-width="1"/>' +
+            '<text x="' + (padL + 4) + '" y="' + (yy - 4).toFixed(1) + '" class="ax-t">' + esc(fmtUsd(val)) + '</text>';
+  }
+  // x-axis: first / middle / last date so the span is readable without crowding
+  let xaxis = "";
+  if (s2.length) {
+    const marks = s2.length > 2 ? [0, Math.floor(s2.length / 2), s2.length - 1] : s2.map((_, i) => i);
+    for (const i of [...new Set(marks)]) {
+      const anchor = i === 0 ? "start" : i === s2.length - 1 ? "end" : "middle";
+      xaxis += '<text x="' + xs[i].toFixed(1) + '" y="' + (h - 6) + '" text-anchor="' + anchor + '" class="ax-t">' + esc(String(s2[i].date).slice(5)) + '</text>';
+    }
   }
   // markers, kept sparse on long series so the line stays clean
   const step = Math.max(1, Math.ceil(grossPts.length / 40));
@@ -1876,7 +1976,7 @@ async function paintValue() {
         '<stop offset="0%" stop-color="#33E3C7" stop-opacity=".28"/>' +
         '<stop offset="100%" stop-color="#33E3C7" stop-opacity="0"/>' +
       '</linearGradient></defs>' +
-      grid +
+      '<g class="axis">' + grid + xaxis + '</g>' +
       '<path d="' + areaPath + '" fill="url(#gfill)" class="fade-in"/>' +
       '<line x1="' + padL + '" y1="' + zeroY.toFixed(1) + '" x2="' + (w - padR) + '" y2="' + zeroY.toFixed(1) +
         '" stroke="rgba(255,255,255,.14)" stroke-width="1"/>' +
@@ -1939,10 +2039,10 @@ async function paintValue() {
   const hitRate = t && t.requests ? t.cacheHits / t.requests : 0;
   const kpi = (l, v, sub, spark) => '<div class="kpi"><div class="kpi-l">' + l + '</div><div class="kpi-n">' + v + '</div><div class="kpi-s">' + sub + '</div></div>';
   kpiHost.innerHTML = '<div class="kpis">' +
-    kpi("Spend", t ? fmtUsd(t.cost.actual) : "—", "measured from token usage") +
+    kpi("Spend", t ? fmtUsd(t.cost.actual) : "—", "measured from token usage", sparkline(r.series.map((d) => d.cumSavedCost), "#2D87AE")) +
     kpi("Requests", String(r.lifetime.requests), "optimised by Joule", sparkline(r.series.map((d) => d.savedCost), "#2D87AE")) +
-    kpi("CO\u2082 avoided", (r.lifetime.savedCarbonG / 1000).toFixed(2) + " kg", "estimated") +
-    kpi("Cache hit rate", t ? (hitRate * 100).toFixed(1) + "%" : "—", "served without recomputing") +
+    kpi("CO\u2082 avoided", (r.lifetime.savedCarbonG / 1000).toFixed(2) + " kg", "estimated", sparkline(r.series.map((d) => d.cumSavedCarbonG), "#33E3C7")) +
+    kpi("Cache hit rate", t ? (hitRate * 100).toFixed(1) + "%" : "—", "served without recomputing", sparkline(r.series.map((d) => d.savedCost), "#33E3C7")) +
   '</div>';
 }
 
