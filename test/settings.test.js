@@ -155,3 +155,55 @@ test("with auth off (dev/DRY_RUN) the local user is the operator, so nothing reg
   assert.equal(r.status, 200, "and can still save instance settings");
   config.clearOverrides();
 });
+
+// ---- auth: a verified Supabase user must resolve to a workspace ----
+// Regression guard for the production 401: attachUser() was never called, Supabase never
+// sets app_metadata.tenant_id, so every correctly-signed token resolved to no tenant.
+test("a real Supabase token (no tenant_id claim) resolves to that user's own workspace", async () => {
+  const sub = "8f2b1c44-0000-4444-9999-1a2b3c4d5e6f";
+  const h = b64({ alg: "HS256", typ: "JWT", kid: "abc-123" });           // Supabase adds a kid even on HS256
+  const p = b64({ iss: "https://proj.supabase.co/auth/v1", aud: "authenticated", sub,
+    email: "you@company.com", role: "authenticated", exp: Math.floor(Date.now() / 1000) + 3600,
+    app_metadata: { provider: "email", providers: ["email"] } });        // NOTE: no tenant_id
+  const tok = `${h}.${p}.${crypto.createHmac("sha256", config.auth.jwtSecret).update(h + "." + p).digest("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
+
+  const r = await fetch(base + "/api/me", { headers: auth(tok) });
+  assert.equal(r.status, 200, "a verified user is no longer 401'd for having no tenant claim");
+  const me = await r.json();
+  assert.equal(me.tenant.id, sub, "one user = one workspace, derived from their Supabase id");
+  assert.equal(me.user.email, "you@company.com");
+});
+
+test("the derived workspace is STABLE across restarts and isolated per user", () => {
+  const subA = "8f2b1c44-0000-4444-9999-1a2b3c4d5e6f";
+  const subB = "11111111-2222-3333-4444-555555555555";
+  const first = tenancy.tenantIdForUser(subA);
+  tenancy.reset();                                   // simulate a process restart
+  assert.equal(tenancy.tenantIdForUser(subA), first, "same user -> same workspace after restart (data survives)");
+  assert.notEqual(tenancy.tenantIdForUser(subB), first, "different users get different workspaces");
+  // a non-UUID subject still yields a valid, stable UUID for the tenant_id column / RLS
+  const derived = tenancy.tenantIdForUser("auth0|abc123");
+  assert.match(derived, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, "valid UUID shape");
+  assert.equal(tenancy.tenantIdForUser("auth0|abc123"), derived, "and deterministic");
+});
+
+test("an explicit tenant claim still wins, so teams keep working later", async () => {
+  const team = "99999999-8888-7777-6666-555555555555";
+  const h = b64({ alg: "HS256", typ: "JWT" });
+  const p = b64({ sub: "aaaaaaaa-0000-0000-0000-000000000001", email: "member@team.com",
+    app_metadata: { tenant_id: team }, exp: Math.floor(Date.now() / 1000) + 3600 });
+  const tok = `${h}.${p}.${crypto.createHmac("sha256", config.auth.jwtSecret).update(h + "." + p).digest("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
+  const me = await (await fetch(base + "/api/me", { headers: auth(tok) })).json();
+  assert.equal(me.tenant.id, team, "an explicit team mapping takes precedence over the derived one");
+});
+
+test("auth diagnostics report the precise reason and never leak the token or secret", () => {
+  const d = tenancy.diagnoseJwt("Bearer " + "x".repeat(40));
+  assert.equal(d.present, true);
+  assert.equal(d.tokenLength, 40, "length only — never the token");
+  assert.equal(d.reason, "not_a_three_part_jwt");
+  const dump = JSON.stringify(tenancy.diagnoseJwt("Bearer aaa.bbb.ccc"));
+  assert.ok(!dump.includes(config.auth.jwtSecret), "the secret value is never included");
+  assert.ok(!dump.includes("aaa.bbb.ccc"), "the token is never included");
+  assert.equal(tenancy.diagnoseJwt(null).reason, "no_authorization_header");
+});

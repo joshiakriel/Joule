@@ -111,7 +111,10 @@ const config = {
      * "operator"` claim on the JWT also works. Empty list + auth off (dev/DRY_RUN)
      * means the single local user is treated as the operator.
      */
-    operatorEmails: String(process.env.OPERATOR_EMAILS || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)
+    operatorEmails: String(process.env.OPERATOR_EMAILS || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
+    // Temporary auth diagnostics. Logs the SHAPE of a rejected token (alg/kid/iss/aud/role,
+    // lengths, and the precise failure reason) — never the token, signature or secret.
+    debug: bool(process.env.DEBUG_AUTH, false)
   },
 
   /**

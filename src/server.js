@@ -140,6 +140,7 @@ function dashAuth(req, res, next) {
   const t = tenancy.resolveFromJwt(req.get("authorization"));
   if (t) { req.tenant = t; req.isOperator = isOperator(t); return next(); }
   if (!config.auth.required) { req.tenant = tenancy.defaultTenant(); req.isOperator = true; return next(); }
+  if (config.auth.debug) console.warn("[auth] 401 on " + req.method + " /api" + req.path + " " + JSON.stringify(tenancy.diagnoseJwt(req.get("authorization"))));
   return res.status(401).json({ error: { message: "authentication required", type: "invalid_request_error", code: "unauthenticated" } });
 }
 app.use("/v1", proxyAuth);
