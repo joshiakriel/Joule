@@ -21,7 +21,9 @@ function build({ tenantName, tenantId, period, totals, quality, net, latency, ge
 
   // ---- header ----
   d.text("JOULE", { size: 20, font: pdf.FONTS.bold, color: BRAND, gap: 2 });
-  d.text("AI cost, energy & carbon report", { size: 11, color: MUTE, gap: 2 });
+  d.text("Cost & emissions summary", { size: 11, color: MUTE, gap: 2 });
+  // Honest header note — states what this document is and, explicitly, what it is not.
+  d.text("Methodology is stated in full below. This is not a certified compliance document.", { size: 8.5, color: MUTE, gap: 2 });
   d.space(6).rule({ color: BRAND });
 
   d.row("Workspace", tenantName || tenantId || "—", { bold: true });
