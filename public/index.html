@@ -592,6 +592,54 @@ button,.tab,.gs-btn,.tb-danger,a.tab{font-family:var(--sans);border-radius:10px;
 /* 6 · CHART AXES */
 .axis text,.ax-t{font-family:var(--sans);font-size:10px;fill:var(--muted2);opacity:.85}
 .axis line{stroke:rgba(255,255,255,.05)}
+
+/* 7 · DOWNLOAD CARDS (Reports) — focal, obviously clickable */
+.dl-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:16px;margin:18px 0 4px}
+.dl{display:flex;flex-direction:column;gap:6px;padding:22px 20px;border-radius:14px;
+  border:1px solid var(--line2);background:rgba(255,255,255,.02);text-decoration:none;color:var(--text);
+  transition:transform 150ms ease,border-color 150ms ease,background 150ms ease}
+.dl:hover{transform:translateY(-2px);border-color:var(--cyan);background:rgba(51,227,199,.05)}
+.dl-i{color:var(--cyan);height:22px}
+.dl-i svg{width:22px;height:22px}
+.dl-n{font-size:15px;font-weight:650;letter-spacing:-.2px}
+.dl-d{font-size:12.5px;color:var(--muted2);line-height:1.45;min-height:34px}
+.dl-b{margin-top:8px;text-align:center;padding:9px 14px;border-radius:9px;font-size:13px;font-weight:600;
+  border:1px solid var(--line2);color:var(--muted2)}
+.dl:hover .dl-b{color:var(--cyan);border-color:var(--cyan)}
+.dl-b.dl-primary{background:var(--cyan);color:#04211C;border-color:var(--cyan)}
+.dl:hover .dl-b.dl-primary{color:#04211C;opacity:.92}
+
+/* 8 · PLAN CARD (Settings) */
+.plan{border:1px solid var(--line2);border-radius:16px;padding:24px;background:
+  linear-gradient(180deg,rgba(51,227,199,.05),transparent 60%),rgba(255,255,255,.015)}
+.plan-top{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+.plan-name{font-size:19px;font-weight:650;letter-spacing:-.3px}
+.plan-sub{font-size:13px;color:var(--muted2);margin-top:4px;max-width:52ch;line-height:1.5}
+.plan-badge{padding:5px 12px;border-radius:999px;font-size:11px;font-weight:650;letter-spacing:.6px;
+  text-transform:uppercase;color:var(--cyan);border:1px solid rgba(51,227,199,.4);background:var(--cyan-dim)}
+.plan-usage{display:flex;gap:44px;flex-wrap:wrap;margin:22px 0 4px;padding-top:20px;border-top:1px solid var(--line)}
+.plan-cta{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-top:20px;padding-top:18px;border-top:1px solid var(--line)}
+.plan-note{font-size:12.5px;color:var(--muted2);max-width:48ch;line-height:1.5}
+
+/* 9 · COLLAPSIBLE TEST TOOL (Activity) */
+.acc{border:1px solid var(--line);border-radius:14px;background:var(--panel);box-shadow:var(--shadow);overflow:hidden}
+.acc-h{display:flex;align-items:center;gap:14px;padding:20px 24px;cursor:pointer;width:100%;
+  background:none;border:0;color:inherit;text-align:left;transition:background 150ms ease}
+.acc-h:hover{background:rgba(255,255,255,.025)}
+.acc-h .acc-t{font-size:15px;font-weight:600;letter-spacing:-.1px}
+.acc-h .acc-s{font-size:12.5px;color:var(--muted2);margin-top:3px;line-height:1.45}
+.acc-h .acc-x{margin-left:auto;color:var(--muted2);transition:transform 150ms ease;flex:0 0 auto}
+.acc.open .acc-x{transform:rotate(180deg)}
+.acc-body{display:none;padding:0 24px 24px}
+.acc.open .acc-body{display:block}
+
+/* 10 · SIDEBAR ACCOUNT — clearly interactive */
+.side-acct{cursor:pointer;border-radius:10px;transition:background 150ms ease}
+.side-acct:hover{background:rgba(255,255,255,.04)}
+.side-acct .acct-x{margin-left:auto;color:var(--muted2);opacity:.7;flex:0 0 auto}
+.side-acct:hover .acct-x{color:var(--cyan);opacity:1}
+/* rectangular logo slot so a real company wordmark fits (Profile upload lands here) */
+.side-logo img{height:30px;max-width:150px;width:auto;object-fit:contain}
 </style>
 </head>
 <body>
@@ -677,9 +725,9 @@ button,.tab,.gs-btn,.tb-danger,a.tab{font-family:var(--sans);border-radius:10px;
       <a href="#reports" data-nav="reports"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg><span>Reports</span></a>
       <a href="#settings" data-nav="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.65 1.65 0 0 0 15 19.4a1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.5.6.86 1.11.9H21a2 2 0 1 1 0 4h-.09c-.51.04-.97.4-1.11.9z"/></svg><span>Settings</span></a>
     </nav>
-    <div class="side-acct">
+    <div class="side-acct" id="acctBtn" role="button" tabindex="0" title="Your profile">
       <div class="av" id="acctAv">J</div>
-      <div class="ai"><div class="an" id="acctName">Your workspace</div><div class="aw" id="acctSub">signed in</div></div>
+      <div class="ai"><div class="an" id="acctName">Your workspace</div><div class="aw" id="acctSub">signed in</div></div><span class="acct-x" id="acctChev"></span>
     </div>
   </aside>
   <div class="main">
@@ -726,22 +774,25 @@ button,.tab,.gs-btn,.tb-danger,a.tab{font-family:var(--sans);border-radius:10px;
     </div>
     <select id="fTier"><option value="">tier · all</option><option value="small">small</option><option value="large">large</option></select>
     <select id="fMode"><option value="">mode · all</option><option value="live">live</option><option value="dry_run">dry-run</option><option value="cache">cache</option></select>
-    <input class="tb-search" type="text" id="fSearch" placeholder="search model…" autocomplete="off">
     <span class="tb-spacer"></span>
     <span class="tb-count" id="fCount"></span>
   </div>
 
   <div class="grid" data-view="activity">
-    <div class="card">
-      <h2>Try a prompt</h2>
+    <div class="card acc" id="tryAcc" style="padding:0">
+      <button class="acc-h" id="tryToggle" type="button" aria-expanded="false" aria-controls="tryBody">
+        <span><span class="acc-t">Test the router (send a sample prompt)</span>
+        <span class="acc-s">Try Joule live — send a prompt and watch it route, meter and verify. For testing; your app sends real traffic automatically.</span></span>
+        <span class="acc-x" id="tryChev"></span>
+      </button>
+      <div class="acc-body" id="tryBody">
       <textarea id="q" placeholder="Type a prompt, or tap an example…"></textarea>
       <div class="chips" id="chips"></div>
       <div class="run">
         <button id="send">Route &amp; meter</button>
-        <a class="dl" id="dljson" href="/api/report?format=json">Report ↓ JSON</a>
-        <a class="dl" id="dlcsv" href="/api/report?format=csv">CSV</a>
       </div>
       <div class="decision empty" id="decision">Send a prompt to see the routing decision, the answer, and what it saved versus always using the large model.</div>
+      </div>
     </div>
 
     <div class="card">
@@ -874,6 +925,8 @@ button,.tab,.gs-btn,.tb-danger,a.tab{font-family:var(--sans);border-radius:10px;
     <div id="planBody"><div class="empty-log">Loading…</div></div>
   </div>
 
+  <div data-view="profile" id="profileBody"></div>
+
   <!-- ============ DOCS — the honesty pages, deliberately public-facing ============ -->
   <div data-view="reports" id="reportsBody"></div>
 
@@ -886,6 +939,7 @@ button,.tab,.gs-btn,.tb-danger,a.tab{font-family:var(--sans);border-radius:10px;
 
   <div class="card logwrap" data-view="activity">
     <h2>Request log</h2>
+    <input class="tb-search" type="text" id="logSearch" placeholder="Filter this log by model name…" autocomplete="off" style="width:100%;margin-bottom:14px">
     <div id="logbox"><div class="empty-log">No requests yet.</div></div>
   </div>
 
@@ -918,6 +972,14 @@ window.fetch = (input, init = {}) => {
   return _fetch(input, init);
 };
 
+const SVG = (d, extra) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + d + '</svg>';
+const ICON = {
+  doc:   SVG('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 15h6"/>'),
+  table: SVG('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 10v10"/>'),
+  code:  SVG('<path d="m8 17-5-5 5-5M16 7l5 5-5 5"/>'),
+  chev:  SVG('<path d="m6 9 6 6 6-6"/>'),
+  gear:  SVG('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.65 1.65 0 0 0 15 19.4a1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.5.6.86 1.11.9H21a2 2 0 1 1 0 4h-.09c-.51.04-.97.4-1.11.9z"/>')
+};
 const gel = (id) => document.getElementById(id);
 const showMsg = (el, text, kind) => { const n = gel(el); n.className = "gate-msg " + (kind || "err"); n.textContent = text; };
 const hideMsg = (el) => { gel(el).className = "gate-msg"; gel(el).textContent = ""; };
@@ -1255,10 +1317,10 @@ async function refresh() {
   const cacheUsd = (t.cacheSavedUsd || 0) + (t.prefixCache ? t.prefixCache.netSavedUsd : 0) + (t.semantic ? t.semantic.netSavedUsd : 0);
   const totalBaseWh = (re.baseline + ce.baseline) || 0.0001;
   $("leverLine").innerHTML =
-    'savings by lever — <b class="cyan">routing ' + routingPct + '%</b> (' + fmtUsd(t.routingSavedUsd || 0) + ')' +
+    '<div style="text-align:center">savings by lever — <b class="cyan">routing ' + routingPct + '%</b> (' + fmtUsd(t.routingSavedUsd || 0) + ')' +
     ' · <b class="cyan">cache</b> ' + fmtWh(cacheSavedWh) + ' / ' + fmtUsd(cacheUsd) + ' <span class="muted">(' + Math.round(cacheSavedWh / totalBaseWh * 100) + '% of total baseline · zero quality risk)</span>' +
     ((t.batch && t.batch.savedUsd > 0) ? ' · <b class="cyan">batch</b> ' + fmtUsd(t.batch.savedUsd) : '') +
-    ((t.reasoning && t.reasoning.savedUsd > 0) ? ' · <b class="cyan">reasoning</b> ' + fmtUsd(t.reasoning.savedUsd) : '');
+    ((t.reasoning && t.reasoning.savedUsd > 0) ? ' · <b class="cyan">reasoning</b> ' + fmtUsd(t.reasoning.savedUsd) : '') + '</div>';
   $("kCost").textContent = fmtUsd(t.cost.saved);
   $("kReq").textContent = t.requests + " request" + (t.requests===1?"":"s");
   $("kEnergy").textContent = fmtWh(t.energyWh.saved);
@@ -1308,6 +1370,7 @@ async function refresh() {
   renderSessions(view.sessions);
   renderModels(view.perModel);
   renderLog(view.recent);
+  applyLogFilter();   // keep the model filter applied across refreshes
 
   // exports carry the active filter so you download exactly what you see
   $("dljson").href = "/api/report?format=json&" + qs();
@@ -1321,6 +1384,8 @@ async function refresh() {
       '<span class="chip-m exact"><span class="dot" style="background:var(--cyan)"></span>Cost — <b>exact</b>, from token usage</span>' +
       '<span class="chip-m est"><span class="dot"></span>Energy — <b>estimated</b> (IEA/Epoch, configurable)</span>' +
       '<span class="chip-m est"><span class="dot"></span>Carbon — <b>estimated</b>: energy × grid intensity (GHG Scope 2)</span>' +
+    '</div>' +
+    '<div class="chips-row" style="justify-content:center">' +
       '<span class="chip-m"><span class="dot"></span>SCI / ISO-IEC 21031 aligned</span>' +
       '<span class="chip-m"><span class="dot"></span>Grid source: <b>' + esc(g.source) + '</b></span>' +
     '</div>';
@@ -1495,8 +1560,32 @@ document.querySelectorAll("#rangeSeg button").forEach(b => b.onclick = () => {
 });
 $("fTier").onchange = () => { filter.tier = $("fTier").value; refresh(); };
 $("fMode").onchange = () => { filter.mode = $("fMode").value; refresh(); };
-let searchTimer;
-$("fSearch").oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { filter.q = $("fSearch").value.trim(); refresh(); }, 250); };
+// Request-log search: filters the ALREADY-RENDERED rows by model name, client-side.
+// A pure view filter — it changes nothing about what was logged, metered or computed.
+const logSearchEl = $("logSearch");
+function applyLogFilter() {
+  if (!logSearchEl) return;
+  const q = logSearchEl.value.trim().toLowerCase();
+  const box = $("logbox");
+  if (!box) return;
+  const rows = box.querySelectorAll("tbody tr");
+  let shown = 0;
+  rows.forEach((tr) => {
+    const hit = !q || (tr.textContent || "").toLowerCase().includes(q);
+    tr.style.display = hit ? "" : "none";
+    if (hit) shown++;
+  });
+  // honest feedback when a filter matches nothing — never a silently blank table
+  let note = $("logSearchNote");
+  if (!note) {
+    note = document.createElement("div");
+    note.id = "logSearchNote"; note.className = "mini-empty"; note.style.marginTop = "12px";
+    box.appendChild(note);
+  }
+  note.style.display = (q && shown === 0) ? "flex" : "none";
+  note.innerHTML = '<span class="me-i">○</span><span>No requests in this log match "' + esc(q) + '".</span>';
+}
+if (logSearchEl) logSearchEl.oninput = applyLogFilter;
 $("clearBtn").onclick = async () => {
   if (!confirm("Clear ALL logged request data on this instance? This cannot be undone.")) return;
   try { const r = await fetch("/api/clear", { method: "POST" }); const j = await r.json(); } catch {}
@@ -1583,7 +1672,7 @@ $("cfg-save").onclick = saveConfig;
    Three areas behind real navigation. HOME shows outcomes only; ACTIVITY holds the detail
    for people who want it; SETTINGS holds every operator/config control and all destructive
    actions. Panels are tagged data-view and switched here — no duplicated markup. */
-const VIEWS = ["overview", "activity", "reports", "settings"];
+const VIEWS = ["overview", "activity", "reports", "settings", "profile"];
 const VIEW_COPY = {
   overview: { t: "Overview", s: "What Joule has saved you, and the quality held while saving it." },
   activity: { t: "Activity", s: "Every request Joule has handled for you." },
@@ -1608,6 +1697,7 @@ function showView(v) {
   if (v === "overview") { paintValue(); paintWeek(); }
   if (v === "settings") { paintProviderState(); paintInstanceSettings(); paintStatus(); paintKeys(); paintPlan(); }
   if (v === "reports") paintDocs();
+  if (v === "profile") paintProfile();
   window.scrollTo({ top: 0, behavior: "instant" in window ? "instant" : "auto" });
 }
 window.addEventListener("hashchange", () => showView((location.hash || "#overview").slice(1)));
@@ -1757,18 +1847,32 @@ async function paintPlan() {
   const box = gel("planBody"); if (!box) return;
   let roi; try { roi = await (await fetch("/api/roi")).json(); } catch { return; }
   const reqs = roi.empty ? 0 : roi.lifetime.requests;
+  const priced = !roi.empty && roi.net && roi.net.subscriptionMonthly > 0;
+  // Premium plan card. NOTHING here is invented: with no billing backend configured we say
+  // exactly that, rather than showing a price or a fake billing state.
   box.innerHTML =
-    '<div class="week">' +
-      '<div class="wk"><div class="wk-l">Requests to date</div><div class="wk-n">' + reqs + '</div></div>' +
-      '<div class="wk"><div class="wk-l">Plan</div><div class="wk-n" style="font-size:15px">' + (roi.empty || !roi.net.subscriptionMonthly ? "No plan price set" : fmtUsd(roi.net.subscriptionMonthly) + "/mo") + '</div></div>' +
-    '</div>' +
-    '<div class="sec-h">Export your data</div>' +
-    '<div class="wiz-nav" style="margin-top:0">' +
-      '<a class="tab" href="/api/report?format=pdf" target="_blank" rel="noopener">Download PDF report</a>' +
-      '<a class="tab" href="/api/report?format=csv" target="_blank" rel="noopener">Download CSV</a>' +
-      '<a class="tab" href="/api/report?format=json" target="_blank" rel="noopener">Download JSON</a>' +
-    '</div>' +
-    '<div class="quiet" style="margin-top:12px">Your data is yours: every request record can be exported at any time in an open format.</div>';
+    '<div class="plan">' +
+      '<div class="plan-top">' +
+        '<div>' +
+          '<div class="plan-name">' + (priced ? "Paid workspace" : "Free workspace") + '</div>' +
+          '<div class="plan-sub">' + (priced
+            ? fmtUsd(roi.net.subscriptionMonthly) + " per month · billed outside Joule"
+            : "Full functionality, no plan price configured on this deployment.") + '</div>' +
+        '</div>' +
+        '<span class="plan-badge">' + (priced ? "Active" : "Trial") + '</span>' +
+      '</div>' +
+      '<div class="plan-usage">' +
+        '<div><div class="kpi-l">Requests to date</div><div class="kpi-n">' + reqs + '</div></div>' +
+        '<div><div class="kpi-l">Plan price</div><div class="kpi-n" style="font-size:20px">' +
+          (priced ? fmtUsd(roi.net.subscriptionMonthly) + "<span style=\"font-size:13px;color:var(--muted2)\">/mo</span>" : "—") + '</div></div>' +
+      '</div>' +
+      '<div class="plan-cta">' +
+        '<button class="gs-btn" id="planUpgrade" type="button">Talk to us about a plan</button>' +
+        '<span class="plan-note">Billing isn\'t connected to this deployment yet — upgrades are handled by our team. Subscription management lives on your Profile.</span>' +
+      '</div>' +
+    '</div>';
+  const up = gel("planUpgrade");
+  if (up) up.onclick = () => { up.textContent = "We'll be in touch"; up.disabled = true; };
 }
 
 /* ---------- DOCS: quickstart, methodology, security. The honesty pages. ---------- */
@@ -1776,12 +1880,24 @@ function paintDocs() {
   const box = gel("docsBody"); if (!box) return;
   const ep = (ME && ME.endpoint) || (location.origin + "/v1");
   box.innerHTML =
-    '<div class="card"><h2>Export your figures</h2>' +
+    '<div class="card"><h2>Export your data</h2>' +
       '<p>A cost &amp; emissions summary built only from your own logged requests. The full methodology travels with every format.</p>' +
-      '<div class="wiz-nav" style="margin-top:4px">' +
-        '<a class="gs-btn" style="text-decoration:none;text-align:center" href="/api/report?format=pdf" target="_blank" rel="noopener">Download PDF report</a>' +
-        '<a class="tab" style="text-decoration:none;text-align:center;padding:10px" href="/api/report?format=csv" target="_blank" rel="noopener">CSV</a>' +
-        '<a class="tab" style="text-decoration:none;text-align:center;padding:10px" href="/api/report?format=json" target="_blank" rel="noopener">JSON</a>' +
+      '<div class="dl-grid">' +
+        '<a class="dl" href="/api/report?format=pdf" target="_blank" rel="noopener">' +
+          '<span class="dl-i">' + ICON.doc + '</span>' +
+          '<span class="dl-n">PDF</span>' +
+          '<span class="dl-d">Branded summary to file or send upward</span>' +
+          '<span class="dl-b dl-primary">Download PDF</span></a>' +
+        '<a class="dl" href="/api/report?format=csv" target="_blank" rel="noopener">' +
+          '<span class="dl-i">' + ICON.table + '</span>' +
+          '<span class="dl-n">CSV</span>' +
+          '<span class="dl-d">Raw rows for your finance team</span>' +
+          '<span class="dl-b">Download CSV</span></a>' +
+        '<a class="dl" href="/api/report?format=json" target="_blank" rel="noopener">' +
+          '<span class="dl-i">' + ICON.code + '</span>' +
+          '<span class="dl-n">JSON</span>' +
+          '<span class="dl-d">Full payload for your own tooling</span>' +
+          '<span class="dl-b">Download JSON</span></a>' +
       '</div>' +
       '<div class="chips-row">' +
         '<span class="chip-m exact"><span class="dot" style="background:var(--cyan)"></span>Real figures only</span>' +
@@ -2078,6 +2194,42 @@ async function paintGetStarted() {
     '<button class="gs-btn" id="gsOpen" type="button">Continue setup</button></div>';
   $("gsOpen").onclick = () => openWizard(!s.providerKey ? 1 : !s.jouleKey ? 2 : 3);
 }
+
+function paintProfile() {
+  const box = gel("profileBody"); if (!box) return;
+  const email = (ME && ME.user && ME.user.email) || "your account";
+  box.innerHTML =
+    '<div class="card"><h2>Account</h2>' +
+      '<p>Signed in as <b>' + esc(email) + '</b>' + (ME && ME.tenant ? ' · workspace <span class="mono">' + esc(String(ME.tenant.id).slice(0, 8)) + '</span>' : '') + '</p>' +
+      '<div class="mini-empty" style="margin-top:16px"><span class="me-i">○</span>' +
+      '<span>Account management — change email, change password, company logo, subscription and account deletion — is being built and is not available yet. ' +
+      'Workspace settings (provider connection, API keys, data) are under <b>Settings</b>.</span></div>' +
+    '</div>';
+}
+
+/* ---------- §4 collapsible test tool · §7 profile entry · icons ---------- */
+(function wireUi() {
+  // paint the icon set once
+  const chev = gel("tryChev"); if (chev) chev.innerHTML = ICON.chev;
+  const acctChev = gel("acctChev"); if (acctChev) acctChev.innerHTML = ICON.gear;
+
+  // the test console is COLLAPSED by default — it is a testing tool, not the front door
+  const acc = gel("tryAcc"), toggle = gel("tryToggle");
+  if (acc && toggle) {
+    toggle.onclick = () => {
+      const open = acc.classList.toggle("open");
+      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    };
+  }
+
+  // the sidebar account block opens the Profile area
+  const acct = gel("acctBtn");
+  if (acct) {
+    const go = () => { location.hash = "#profile"; showView("profile"); };
+    acct.onclick = go;
+    acct.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } };
+  }
+})();
 
 /* ---------------------------------------------------------------------------
    BOOT — must be the LAST thing in this script.
