@@ -1881,9 +1881,29 @@ async function paintValue() {
   if (!heroHost) return;
   let r; try { r = await (await fetch("/api/roi")).json(); } catch { return; }
 
-  // PROGRESSIVE DISCLOSURE: no data => ONE centered empty state, every other module hidden.
-  // Any unexpected shape (401/error/partial) is treated as "no data" rather than throwing.
-  if (!r || r.empty || !r.lifetime || !r.net || !Array.isArray(r.series)) {
+  // A FAILURE IS NOT AN EMPTY WORKSPACE. Only the server's explicit `empty:true` means
+  // "no data yet"; any other non-conforming shape (500/401/partial) is a load failure and
+  // must say so — otherwise a broken endpoint looks identical to a new workspace, and
+  // Overview silently contradicts Activity.
+  const genuinelyEmpty = r && r.empty === true;
+  if (!genuinelyEmpty && (!r || !r.lifetime || !r.net || !Array.isArray(r.series))) {
+    heroHost.innerHTML = ""; chartHost.innerHTML = ""; kpiHost.innerHTML = "";
+    const wkf = gel("weekWrap"); if (wkf) wkf.style.display = "none";
+    const zf = gel("homeZero");
+    if (zf) {
+      zf.style.display = "block";
+      const why = r && r.error && r.error.message ? esc(r.error.message) : "the server returned an unexpected response";
+      zf.innerHTML = '<div class="zero"><div class="z-i">⚠</div>' +
+        '<h3>Couldn\'t load your savings</h3>' +
+        '<p>Your data is safe — this page just failed to read it (' + why + '). ' +
+        'Activity still shows your requests. Try reloading; if it persists, check the server logs for /api/roi.</p>' +
+        '<button id="zeroCta" type="button">Reload</button></div>';
+      gel("zeroCta").onclick = () => location.reload();
+    }
+    return;
+  }
+  // PROGRESSIVE DISCLOSURE: genuinely no data => ONE centered empty state, others hidden.
+  if (genuinelyEmpty) {
     heroHost.innerHTML = ""; chartHost.innerHTML = ""; kpiHost.innerHTML = "";
     const wk = gel("weekWrap"); if (wk) wk.style.display = "none";
     const z = gel("homeZero");

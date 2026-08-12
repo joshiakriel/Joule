@@ -248,3 +248,30 @@ test("digest requires a recipient and stays tenant-scoped", async () => {
     assert.match((await digest.send(d, null)).reason, /no recipient/i, "won't send into the void");
   } finally { Object.assign(config.digest, saved); }
 });
+
+// ---- Overview vs Activity consistency ----
+// Overview reads /api/roi, Activity reads /api/summary + /api/stats. They must never
+// disagree for the same workspace and range, or the product contradicts itself.
+test("Overview (/api/roi) and Activity (/api/summary, /api/stats) agree for the same workspace", async () => {
+  await seed(14);
+  const roi = await getJson("/api/roi");
+  const summary = await getJson("/api/summary");
+  const stats = await getJson("/api/stats");
+
+  assert.equal(roi.empty, false, "Overview must NOT report empty when requests exist");
+  assert.equal(roi.lifetime.requests, summary.totals.requests, "same request count as Activity");
+  assert.equal(roi.lifetime.requests, stats.totals.requests, "and as /api/stats");
+  assert.equal(roi.net.grossSaved, summary.totals.cost.saved, "same gross saving");
+  assert.equal(roi.lifetime.savedCarbonG, summary.totals.carbonG.saved, "same carbon saved");
+  // the cumulative series must land on the same lifetime figure the other pages show
+  const last = roi.series[roi.series.length - 1];
+  assert.ok(Math.abs(last.cumSavedCost - summary.totals.cost.saved) < 1e-9, "series ends at Activity's total");
+});
+
+test("a failed /api/roi is NOT rendered as an empty workspace", () => {
+  const html = fs.readFileSync(path.join(__dirname, "..", "public", "index.html"), "utf8");
+  const js = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join("\n");
+  assert.match(js, /genuinelyEmpty = r && r\.empty === true/, "only the server's explicit empty:true means 'no data'");
+  assert.match(js, /Couldn\\?'t load your savings/, "a load failure gets its own honest state");
+  assert.match(js, /No savings to show yet/, "the genuine empty state still exists");
+});
