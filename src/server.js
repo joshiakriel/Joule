@@ -727,6 +727,7 @@ app.get("/api/me", (req, res) => {
       const k = tenancy.getUpstreamKey(tenantId);
       return { connected: Boolean(k), last4: k ? k.slice(-4) : null, baseUrl: config.upstreamBaseUrl };
     })(),
+    branding: { logo: tenancy.getLogo(tenantId) },
     onboarding: onboardingState(tenantId),
     keys: tenancy.listKeys(tenantId)
   });
@@ -889,6 +890,88 @@ app.post("/api/keys/:id/rotate", (req, res) => {
   const minted = tenancy.mintKey(tenantId, existing.name || "rotated");
   tenancy.revokeKey(req.params.id);   // old key stops authenticating immediately
   res.status(201).json({ ok: true, key: minted.key, id: minted.id, last4: minted.last4, name: minted.name, revoked: req.params.id });
+});
+
+// ---- profile / account (§8) ------------------------------------------------
+// ACCOUNT settings live here; WORKSPACE settings live under /api/config + /api/provider-key.
+// Email and password changes are performed by the MANAGED auth provider in the browser —
+// this server never sees a password. It owns only the things a client cannot be trusted
+// with: the 30-day email cooldown, the per-tenant logo, and tenant-scoped deletion.
+
+app.get("/api/profile", (req, res) => {
+  const tenantId = req.tenant.id, userId = req.tenant.userId;
+  res.json({
+    user: { id: userId, email: req.tenant.email || null },
+    tenant: { id: tenantId, name: (tenancy.getTenant(tenantId) || {}).name || null },
+    emailChange: tenancy.emailChangeState(userId),
+    logo: tenancy.getLogo(tenantId),
+    // Honest: there is no billing backend wired up. We say so rather than fake a plan.
+    subscription: {
+      billingConfigured: false,
+      planPriceMonthly: config.subscriptionCostMonthly || 0,
+      status: config.subscriptionCostMonthly > 0 ? "priced" : "none",
+      note: "Billing isn't connected to this deployment yet, so there's no subscription to manage here. Plan changes are handled by our team."
+    },
+    authProviderConfigured: Boolean(config.auth.supabaseUrl && config.auth.supabaseAnonKey)
+  });
+});
+
+// The COOLDOWN GATE. The client asks permission BEFORE calling the auth provider, and
+// confirms afterwards. Server-side because a client-side check is not enforcement.
+app.post("/api/profile/email-change", (req, res) => {
+  const userId = req.tenant.userId, tenantId = req.tenant.id;
+  if (!userId) return res.status(400).json({ ok: false, message: "No signed-in user to apply this to." });
+  const state = tenancy.emailChangeState(userId);
+  if (!state.allowed) {
+    return res.status(429).json({
+      ok: false, ...state,
+      message: `You can change your email again on ${new Date(state.nextAllowedAt).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}.`
+    });
+  }
+  if (req.body && req.body.confirm === true) {   // the provider accepted it — start the clock
+    const when = tenancy.recordEmailChange(userId, tenantId);
+    return res.json({ ok: true, recordedAt: when, ...tenancy.emailChangeState(userId) });
+  }
+  res.json({ ok: true, ...state });              // permission check only
+});
+
+// Company logo — replaces the sidebar mark. Validated: type + size, before anything is stored.
+const LOGO_TYPES = ["image/png", "image/jpeg", "image/webp", "image/svg+xml"];
+const LOGO_MAX_BYTES = 256 * 1024;
+app.post("/api/profile/logo", (req, res) => {
+  const dataUrl = typeof req.body?.dataUrl === "string" ? req.body.dataUrl : "";
+  const m = /^data:([a-z+/-]+);base64,([A-Za-z0-9+/=]+)$/i.exec(dataUrl.trim());
+  if (!m) return res.status(400).json({ ok: false, message: "That doesn't look like an image file." });
+  if (!LOGO_TYPES.includes(m[1].toLowerCase())) {
+    return res.status(400).json({ ok: false, message: "Use a PNG, JPEG, WebP or SVG image." });
+  }
+  const bytes = Math.floor(m[2].length * 3 / 4);
+  if (bytes > LOGO_MAX_BYTES) {
+    return res.status(413).json({ ok: false, message: `That image is ${(bytes / 1024).toFixed(0)} KB — please use one under ${LOGO_MAX_BYTES / 1024} KB.` });
+  }
+  tenancy.setLogo(req.tenant.id, dataUrl.trim());
+  res.json({ ok: true, logo: tenancy.getLogo(req.tenant.id) });
+});
+app.delete("/api/profile/logo", (req, res) => { tenancy.setLogo(req.tenant.id, null); res.json({ ok: true, logo: null }); });
+
+// Account deletion. Requires a typed confirmation; deletes EVERYTHING for this tenant.
+app.post("/api/profile/delete", async (req, res) => {
+  const tenantId = req.tenant.id;
+  const typed = String(req.body?.confirm || "").trim().toUpperCase();
+  if (typed !== "DELETE") {
+    return res.status(400).json({ ok: false, message: 'Type DELETE to confirm.' });
+  }
+  const removedRecords = store.clear(tenantId);              // request log (durable + mirror)
+  const purged = tenancy.purgeTenant(tenantId);              // keys, secrets, users, logo, tenant
+  try { const d = store.durable(); if (d && d.deleteTenant) await d.deleteTenant(tenantId); }
+  catch (e) { console.error("tenant delete error:", e && e.message); }
+  // The auth account itself belongs to the managed provider — we do not hold the
+  // privileged key needed to delete it, and we say so rather than implying we did.
+  res.json({
+    ok: true, removedRecords, revokedKeys: purged.keys,
+    reason: typeof req.body?.reason === "string" ? req.body.reason.slice(0, 200) : null,
+    authAccountNote: "Your Joule workspace and all its data are deleted. Your sign-in account is held by our authentication provider — contact us if you also want that removed."
+  });
 });
 
 // Weekly value digest for THIS tenant — the same payload the email uses, so the in-app

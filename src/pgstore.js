@@ -122,10 +122,10 @@ function create({ databaseUrl, ssl, poolMax = 5, connectTimeoutMs = 5000, statem
   // enqueued off-path like every other write: an outage buffers them, never breaks a response.
   async function loadIdentity() {
     const [tenants, apiKeys, secrets, users] = await Promise.all([
-      pool.query("SELECT id, name FROM app_load_tenants()"),
+      pool.query("SELECT id, name, logo FROM app_load_tenants()"),
       pool.query("SELECT id, tenant_id, key_hash, last4, name, revoked, created_at FROM app_load_api_keys()"),
       pool.query("SELECT tenant_id, upstream_key_enc FROM app_load_tenant_secrets()"),
-      pool.query("SELECT id, tenant_id, email FROM app_load_users()")
+      pool.query("SELECT id, tenant_id, email, email_changed_at FROM app_load_users()")
     ]);
     return { tenants: tenants.rows, apiKeys: apiKeys.rows, secrets: secrets.rows, users: users.rows };
   }
@@ -156,12 +156,28 @@ function create({ databaseUrl, ssl, poolMax = 5, connectTimeoutMs = 5000, statem
       params: [tenantId, encBlob == null ? null : JSON.stringify(encBlob)] });
   }
 
+  // ---- profile ----
+  function persistEmailChangedAt(userId, tenantId, whenIso) {
+    enqueue({ label: "emailChangedAt", tenant: tenantId,
+      sql: "UPDATE users SET email_changed_at = $2, email = COALESCE($3, email) WHERE id = $1",
+      params: [userId, whenIso, null] });
+  }
+  function persistLogo(tenantId, logo) {
+    enqueue({ label: "logo", sql: "UPDATE tenants SET logo = $2 WHERE id = $1", params: [tenantId, logo] });
+  }
+  // Full tenant deletion, transactional, via the SECURITY DEFINER routine.
+  async function deleteTenant(tenantId) {
+    const { rows } = await pool.query("SELECT records, keys, users FROM app_delete_tenant($1)", [tenantId]);
+    return rows[0] || { records: 0, keys: 0, users: 0 };
+  }
+
   const flush = () => queue;
   const close = async () => { await queue.catch(() => {}); if (!_pool) await pool.end(); };
   const health = () => ({ backend: "postgres", status: degraded ? "degraded" : "ok", pendingWrites: pending.length, droppedWrites: dropped });
 
   return { ensureSchema, load, persistAdd, persistVerification, persistClear, persistClearTenant,
     loadIdentity, persistTenant, persistUser, persistApiKey, persistRevokeKey, persistTenantSecret,
+    persistEmailChangedAt, persistLogo, deleteTenant,
     recover, flush, close, health, isDegraded: () => degraded };
 }
 

@@ -633,6 +633,17 @@ button,.tab,.gs-btn,.tb-danger,a.tab{font-family:var(--sans);border-radius:10px;
 .acc-body{display:none;padding:0 24px 24px}
 .acc.open .acc-body{display:block}
 
+/* PROFILE */
+.logo-row{display:flex;align-items:center;gap:20px;flex-wrap:wrap;margin:16px 0 4px}
+.logo-prev{width:180px;height:56px;border:1px dashed var(--line2);border-radius:12px;display:grid;
+  place-items:center;background:rgba(255,255,255,.02);overflow:hidden;flex:0 0 auto}
+.logo-prev img{max-width:160px;max-height:44px;object-fit:contain}
+.rg{border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:0 0 16px}
+.rg legend{font-size:12.5px;color:var(--muted2);padding:0 6px}
+.rg label{display:flex;align-items:center;gap:9px;font-size:13.5px;padding:6px 0;cursor:pointer}
+.rg input[type=radio]{accent-color:var(--cyan)}
+.rg input[type=text]{padding:9px 11px;border-radius:8px;border:1px solid var(--line2);background:#0D1917;color:var(--text);font-family:var(--sans);font-size:13px}
+
 /* 10 · SIDEBAR ACCOUNT — clearly interactive */
 .side-acct{cursor:pointer;border-radius:10px;transition:background 150ms ease}
 .side-acct:hover{background:rgba(255,255,255,.04)}
@@ -715,7 +726,7 @@ button,.tab,.gs-btn,.tb-danger,a.tab{font-family:var(--sans);border-radius:10px;
 
 <div class="shell">
   <aside class="side">
-    <div class="side-logo">
+    <div class="side-logo" id="sideLogo">
       <img src="logo-mark.png" alt="" onerror="this.style.display='none'">
       <span class="sl-t">Joule</span>
     </div>
@@ -1137,7 +1148,7 @@ function paintAccount() {
 
 async function startApp() {
   try { ME = await (await fetch("/api/me")).json(); } catch { ME = null; }
-  paintAccount();
+  paintAccount(); paintBranding();
   if (ME && ME.onboarding && !ME.onboarding.complete) {
     const s = ME.onboarding.steps;
     openWizard(!s.providerKey ? 1 : !s.jouleKey ? 2 : 3);
@@ -2195,16 +2206,209 @@ async function paintGetStarted() {
   $("gsOpen").onclick = () => openWizard(!s.providerKey ? 1 : !s.jouleKey ? 2 : 3);
 }
 
-function paintProfile() {
+/* ---------- §8 PROFILE — account settings (workspace settings stay in Settings) ----------
+   Email and password changes go through the MANAGED auth provider (Supabase) from the
+   browser, so this app never sees or stores a password. The 30-day email cooldown is
+   enforced SERVER-side; the UI only reflects it. Nothing here invents billing state. */
+let PROFILE = null;
+
+async function supaUser(body, accessToken) {
+  const r = await _fetch(AUTH_CFG.supabaseUrl + "/auth/v1/user", {
+    method: "PUT",
+    headers: { "content-type": "application/json", apikey: AUTH_CFG.supabaseAnonKey, authorization: "Bearer " + accessToken },
+    body: JSON.stringify(body)
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.msg || d.message || d.error_description || "The authentication provider rejected that change.");
+  return d;
+}
+
+async function paintProfile() {
   const box = gel("profileBody"); if (!box) return;
-  const email = (ME && ME.user && ME.user.email) || "your account";
+  try { PROFILE = await (await fetch("/api/profile")).json(); } catch { PROFILE = null; }
+  if (!PROFILE || !PROFILE.user) {
+    box.innerHTML = '<div class="card"><h2>Account</h2><div class="mini-empty"><span class="me-i">&#9888;</span>' +
+      '<span>Couldn\'t load your account. Reload, or sign in again.</span></div></div>';
+    return;
+  }
+  const P = PROFILE, ec = P.emailChange, canAuth = P.authProviderConfigured && ACCESS_TOKEN;
+  const nextDate = ec.nextAllowedAt ? new Date(ec.nextAllowedAt).toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" }) : null;
+
   box.innerHTML =
+    // ---- identity ----
     '<div class="card"><h2>Account</h2>' +
-      '<p>Signed in as <b>' + esc(email) + '</b>' + (ME && ME.tenant ? ' · workspace <span class="mono">' + esc(String(ME.tenant.id).slice(0, 8)) + '</span>' : '') + '</p>' +
-      '<div class="mini-empty" style="margin-top:16px"><span class="me-i">○</span>' +
-      '<span>Account management — change email, change password, company logo, subscription and account deletion — is being built and is not available yet. ' +
-      'Workspace settings (provider connection, API keys, data) are under <b>Settings</b>.</span></div>' +
+      '<p>Signed in as <b>' + esc(P.user.email || "unknown") + '</b>' +
+      (P.tenant.id ? ' &middot; workspace <span class="mono">' + esc(String(P.tenant.id).slice(0, 8)) + '</span>' : '') + '</p>' +
+      (canAuth ? '' : '<div class="mini-empty" style="margin-top:14px"><span class="me-i">&#9888;</span><span>Sign-in provider isn\'t configured on this deployment, so email and password changes are unavailable here.</span></div>') +
+    '</div>' +
+
+    // ---- email (30-day cooldown) ----
+    '<div class="card"><h2>Email address</h2>' +
+      '<p>We\'ll send a confirmation link to the new address. The change only takes effect once you click it.</p>' +
+      (ec.allowed
+        ? '<div class="cfg-grid"><label class="cfg-f"><span class="cfg-lbl">New email address</span>' +
+          '<input type="email" id="pfEmail" autocomplete="email" placeholder="you@company.com"' + (canAuth ? '' : ' disabled') + '></label></div>' +
+          '<div class="gate-msg" id="pfEmailMsg"></div>' +
+          '<div class="run"><button class="gs-btn" id="pfEmailSave"' + (canAuth ? '' : ' disabled') + '>Send confirmation link</button>' +
+          '<span class="plan-note">You can change your email once every ' + ec.cooldownDays + ' days.</span></div>'
+        : '<div class="mini-empty"><span class="me-i">&#9200;</span><span>You changed your email recently. You can change it again on <b>' + esc(nextDate) + '</b> (' + ec.daysRemaining + ' day' + (ec.daysRemaining === 1 ? '' : 's') + ' to go).</span></div>') +
+    '</div>' +
+
+    // ---- password (re-auth with the current password) ----
+    '<div class="card"><h2>Password</h2>' +
+      '<p>Confirm your current password, then choose a new one. Your password is handled entirely by our authentication provider — Joule never sees or stores it.</p>' +
+      '<div class="cfg-grid">' +
+        '<label class="cfg-f"><span class="cfg-lbl">Current password</span><input type="password" id="pfPwOld" autocomplete="current-password"' + (canAuth ? '' : ' disabled') + '></label>' +
+        '<label class="cfg-f"><span class="cfg-lbl">New password</span><input type="password" id="pfPwNew" autocomplete="new-password" minlength="6"' + (canAuth ? '' : ' disabled') + '></label>' +
+      '</div>' +
+      '<div class="gate-msg" id="pfPwMsg"></div>' +
+      '<div class="run"><button class="gs-btn" id="pfPwSave"' + (canAuth ? '' : ' disabled') + '>Update password</button></div>' +
+    '</div>' +
+
+    // ---- company logo ----
+    '<div class="card"><h2>Company logo</h2>' +
+      '<p>Replaces the Joule mark in the sidebar for everyone in your workspace. PNG, JPEG, WebP or SVG, up to 256&nbsp;KB. A wide wordmark works best.</p>' +
+      '<div class="logo-row">' +
+        '<div class="logo-prev" id="pfLogoPrev">' + (P.logo ? '<img src="' + esc(P.logo) + '" alt="Your logo">' : '<span class="muted">No logo set</span>') + '</div>' +
+        '<div><input type="file" id="pfLogoFile" accept="image/png,image/jpeg,image/webp,image/svg+xml" style="display:none">' +
+          '<button class="gs-btn" id="pfLogoPick" type="button">Upload a logo</button> ' +
+          (P.logo ? '<button class="tab" id="pfLogoClear" type="button">Remove</button>' : '') +
+        '</div>' +
+      '</div>' +
+      '<div class="gate-msg" id="pfLogoMsg"></div>' +
+    '</div>' +
+
+    // ---- subscription (moved here from Settings) ----
+    '<div class="card"><h2>Subscription</h2>' +
+      '<div class="plan-top"><div>' +
+        '<div class="plan-name">' + (P.subscription.planPriceMonthly > 0 ? fmtUsd(P.subscription.planPriceMonthly) + " / month" : "No paid plan") + '</div>' +
+        '<div class="plan-sub">' + esc(P.subscription.note) + '</div>' +
+      '</div><span class="plan-badge">' + (P.subscription.planPriceMonthly > 0 ? "Priced" : "Free") + '</span></div>' +
+    '</div>' +
+
+    // ---- danger ----
+    '<div class="card" style="border-color:rgba(255,120,120,.32)"><h2>Delete account</h2>' +
+      '<p>Permanently deletes this workspace: every request record, savings total, API key and your stored provider key. This cannot be undone.</p>' +
+      '<div class="run"><button class="tb-danger" id="pfDelOpen" type="button">Delete my account</button></div>' +
+      '<div id="pfDelFlow" style="display:none;margin-top:18px;padding-top:18px;border-top:1px solid var(--line)">' +
+        '<div class="sec-label">Before you go</div>' +
+        '<fieldset class="rg"><legend>Are you sure you want to cancel your subscription?</legend>' +
+          '<label><input type="radio" name="pfCancel" value="yes"> Yes, cancel and delete everything</label>' +
+          '<label><input type="radio" name="pfCancel" value="no"> No, take me back</label>' +
+        '</fieldset>' +
+        '<fieldset class="rg"><legend>Why are you leaving?</legend>' +
+          ['Too expensive', 'Didn\'t save me enough', 'Missing a feature I need', 'Too hard to set up', 'Switching to something else', 'Other']
+            .map((o) => '<label><input type="radio" name="pfWhy" value="' + esc(o) + '"> ' + esc(o) + '</label>').join('') +
+          '<input type="text" id="pfWhyText" placeholder="Anything else you\'d like to tell us (optional)" style="margin-top:10px;width:100%">' +
+        '</fieldset>' +
+        '<div class="cfg-grid" style="margin-top:6px"><label class="cfg-f"><span class="cfg-lbl">Type DELETE to confirm</span>' +
+          '<input type="text" id="pfDelConfirm" autocomplete="off" placeholder="DELETE"></label></div>' +
+        '<div class="gate-msg" id="pfDelMsg"></div>' +
+        '<div class="run"><button class="tb-danger" id="pfDelGo" type="button">Permanently delete</button>' +
+        '<button class="tab" id="pfDelCancel" type="button">Keep my account</button></div>' +
+      '</div>' +
     '</div>';
+
+  wireProfile(canAuth);
+}
+
+function wireProfile(canAuth) {
+  // --- email: ask the server for permission, change via the provider, then confirm ---
+  const eBtn = gel("pfEmailSave");
+  if (eBtn) eBtn.onclick = async () => {
+    const email = (gel("pfEmail").value || "").trim();
+    if (!email) return showMsg("pfEmailMsg", "Enter the new email address.");
+    eBtn.disabled = true;
+    try {
+      const gate = await (await fetch("/api/profile/email-change", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).json();
+      if (!gate.ok) return showMsg("pfEmailMsg", gate.message);          // cooldown, server-enforced
+      await supaUser({ email }, ACCESS_TOKEN);                            // provider sends the link
+      await fetch("/api/profile/email-change", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirm: true }) });
+      showMsg("pfEmailMsg", "Check " + email + " for a confirmation link. The change applies once you click it.", "ok");
+      setTimeout(paintProfile, 1500);
+    } catch (err) { showMsg("pfEmailMsg", err.message); }
+    finally { eBtn.disabled = false; }
+  };
+
+  // --- password: re-auth with the current password, then update via the provider ---
+  const pBtn = gel("pfPwSave");
+  if (pBtn) pBtn.onclick = async () => {
+    const oldPw = gel("pfPwOld").value, newPw = gel("pfPwNew").value;
+    if (!oldPw || !newPw) return showMsg("pfPwMsg", "Enter your current and new password.");
+    if (newPw.length < 6) return showMsg("pfPwMsg", "Use at least 6 characters for the new password.");
+    pBtn.disabled = true;
+    try {
+      await supabaseAuth("token?grant_type=password", { email: PROFILE.user.email, password: oldPw }); // re-auth
+      await supaUser({ password: newPw }, ACCESS_TOKEN);
+      gel("pfPwOld").value = ""; gel("pfPwNew").value = "";
+      showMsg("pfPwMsg", "Password updated.", "ok");
+    } catch (err) {
+      showMsg("pfPwMsg", /invalid|credential/i.test(err.message) ? "That current password isn't right." : err.message);
+    } finally { pBtn.disabled = false; }
+  };
+
+  // --- logo ---
+  const pick = gel("pfLogoPick"), file = gel("pfLogoFile");
+  if (pick && file) {
+    pick.onclick = () => file.click();
+    file.onchange = () => {
+      const f = file.files && file.files[0];
+      if (!f) return;
+      if (f.size > 256 * 1024) return showMsg("pfLogoMsg", "That image is " + Math.round(f.size / 1024) + " KB — please use one under 256 KB.");
+      const rd = new FileReader();
+      rd.onload = async () => {
+        try {
+          const r = await fetch("/api/profile/logo", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ dataUrl: rd.result }) });
+          const d = await r.json();
+          if (!d.ok) return showMsg("pfLogoMsg", d.message);
+          showMsg("pfLogoMsg", "Logo updated.", "ok");
+          try { ME = await (await fetch("/api/me")).json(); } catch (e) {}
+          paintBranding(); paintProfile();
+        } catch (e) { showMsg("pfLogoMsg", "Upload failed. Try again."); }
+      };
+      rd.readAsDataURL(f);
+    };
+  }
+  const clr = gel("pfLogoClear");
+  if (clr) clr.onclick = async () => {
+    await fetch("/api/profile/logo", { method: "DELETE" });
+    try { ME = await (await fetch("/api/me")).json(); } catch (e) {}
+    paintBranding(); paintProfile();
+  };
+
+  // --- delete ---
+  const open = gel("pfDelOpen"), flow = gel("pfDelFlow");
+  if (open && flow) open.onclick = () => { flow.style.display = "block"; open.style.display = "none"; };
+  const cancel = gel("pfDelCancel");
+  if (cancel) cancel.onclick = () => { flow.style.display = "none"; open.style.display = ""; };
+  const go = gel("pfDelGo");
+  if (go) go.onclick = async () => {
+    const sure = document.querySelector('input[name="pfCancel"]:checked');
+    if (!sure || sure.value !== "yes") return showMsg("pfDelMsg", "Confirm you want to cancel and delete everything.");
+    const why = document.querySelector('input[name="pfWhy"]:checked');
+    const confirm = (gel("pfDelConfirm").value || "").trim();
+    if (confirm.toUpperCase() !== "DELETE") return showMsg("pfDelMsg", "Type DELETE to confirm.");
+    go.disabled = true;
+    try {
+      const r = await fetch("/api/profile/delete", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confirm, reason: (why ? why.value : "") + (gel("pfWhyText").value ? " — " + gel("pfWhyText").value : "") }) });
+      const d = await r.json();
+      if (!d.ok) { showMsg("pfDelMsg", d.message || "Deletion failed."); go.disabled = false; return; }
+      gel("profileBody").innerHTML = '<div class="card"><h2>Account deleted</h2>' +
+        '<p>Your workspace and all of its data are gone: ' + d.removedRecords + ' request record(s) and ' + d.revokedKeys + ' API key(s) removed.</p>' +
+        '<p class="plan-note">' + esc(d.authAccountNote) + '</p></div>';
+      ACCESS_TOKEN = null;
+    } catch (e) { showMsg("pfDelMsg", "Deletion failed. Try again."); go.disabled = false; }
+  };
+}
+
+// The sidebar mark is the tenant's logo when one is set, else the Joule mark.
+function paintBranding() {
+  const slot = gel("sideLogo"); if (!slot) return;
+  const logo = ME && ME.branding && ME.branding.logo;
+  slot.innerHTML = logo
+    ? '<img src="' + esc(logo) + '" alt="">'
+    : '<img src="logo-mark.png" alt="" onerror="this.style.display=\'none\'"><span class="sl-t">Joule</span>';
 }
 
 /* ---------- §4 collapsible test tool · §7 profile entry · icons ---------- */

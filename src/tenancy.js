@@ -28,6 +28,7 @@ function reset() {
   keysByHash = new Map();
   secretsByTenant = new Map();
   usersById = new Map();
+  if (typeof emailChangedAt !== "undefined") { emailChangedAt.clear(); logos.clear(); }
   ensureTenant(DEFAULT_TENANT_ID, "default");
 }
 
@@ -54,10 +55,10 @@ const persist = (fn, ...args) => { try { if (durable && durable[fn]) durable[fn]
 async function hydrate() {
   if (!durable || !durable.loadIdentity) return { tenants: 0, keys: 0, secrets: 0, users: 0 };
   const d = await durable.loadIdentity();
-  for (const t of d.tenants) if (!tenants.has(t.id)) tenants.set(t.id, { id: t.id, name: t.name || t.id, createdAt: new Date().toISOString() });
+  for (const t of d.tenants) { if (!tenants.has(t.id)) tenants.set(t.id, { id: t.id, name: t.name || t.id, createdAt: new Date().toISOString() }); if (t.logo) logos.set(t.id, t.logo); }
   for (const k of d.apiKeys) keysByHash.set(k.key_hash, { id: k.id, tenantId: k.tenant_id, last4: k.last4, name: k.name, createdAt: k.created_at ? new Date(k.created_at).toISOString() : new Date().toISOString(), revoked: k.revoked === true });
   for (const s of d.secrets) if (s.upstream_key_enc) secretsByTenant.set(s.tenant_id, s.upstream_key_enc);
-  for (const u of d.users) usersById.set(u.id, u.tenant_id);
+  for (const u of d.users) { usersById.set(u.id, u.tenant_id); if (u.email_changed_at) emailChangedAt.set(u.id, new Date(u.email_changed_at).toISOString()); }
   return { tenants: d.tenants.length, keys: d.apiKeys.length, secrets: d.secrets.length, users: d.users.length };
 }
 
@@ -259,6 +260,51 @@ function diagnoseJwt(authHeader) {
   return out;
 }
 
+/* ---------- profile: email-change cooldown, company logo, account deletion ----------
+   The cooldown is SERVER-AUTHORITATIVE — a client-side check is not enforcement. The
+   email/password changes themselves are performed by the managed auth provider
+   (Supabase); we never see or store a password, and we only record WHEN an email
+   change happened so the policy can be applied. */
+const EMAIL_COOLDOWN_DAYS = 30;
+const emailChangedAt = new Map();   // userId -> ISO timestamp
+const logos = new Map();            // tenantId -> data URL
+
+function emailChangeState(userId, now = Date.now()) {
+  const last = userId ? emailChangedAt.get(userId) : null;
+  if (!last) return { allowed: true, lastChangedAt: null, nextAllowedAt: null, daysRemaining: 0, cooldownDays: EMAIL_COOLDOWN_DAYS };
+  const next = new Date(last).getTime() + EMAIL_COOLDOWN_DAYS * 86400000;
+  const allowed = now >= next;
+  return {
+    allowed, lastChangedAt: last, nextAllowedAt: new Date(next).toISOString(),
+    daysRemaining: allowed ? 0 : Math.ceil((next - now) / 86400000), cooldownDays: EMAIL_COOLDOWN_DAYS
+  };
+}
+function recordEmailChange(userId, tenantId, whenIso) {
+  const when = whenIso || new Date().toISOString();
+  emailChangedAt.set(userId, when);
+  persist("persistEmailChangedAt", userId, tenantId, when);
+  return when;
+}
+
+// Company logo: a size-bounded data URL, validated by the caller before it reaches here.
+function setLogo(tenantId, dataUrl) {
+  if (dataUrl) logos.set(tenantId, dataUrl); else logos.delete(tenantId);
+  persist("persistLogo", tenantId, dataUrl || null);
+}
+const getLogo = (tenantId) => logos.get(tenantId) || null;
+
+// Drop EVERYTHING for one tenant from the in-memory caches. The durable delete is done by
+// the caller so the request log goes with it.
+function purgeTenant(tenantId) {
+  let keys = 0;
+  for (const [hash, rec] of [...keysByHash]) if (rec.tenantId === tenantId) { keysByHash.delete(hash); keys++; }
+  for (const [uid, tid] of [...usersById]) if (tid === tenantId) { usersById.delete(uid); emailChangedAt.delete(uid); }
+  secretsByTenant.delete(tenantId);
+  logos.delete(tenantId);
+  tenants.delete(tenantId);
+  return { keys };
+}
+
 // ---- per-tenant upstream key encryption (AES-256-GCM) ----
 function encKey() {
   if (config.auth.encKey) return crypto.createHash("sha256").update(config.auth.encKey).digest(); // 32 bytes from provided secret
@@ -289,5 +335,6 @@ reset();
 module.exports = {
   DEFAULT_TENANT_ID, reset, ensureTenant, createTenant, getTenant, defaultTenant, attachUser,
   mintKey, revokeKey, listKeys, resolveFromApiKey, resolveFromJwt, verifyJwt,
-  setUpstreamKey, getUpstreamKey, diagnoseJwt, tenantIdForUser, usePersistence, hydrate, _sha256: sha256
+  setUpstreamKey, getUpstreamKey, diagnoseJwt, tenantIdForUser, usePersistence, hydrate,
+  emailChangeState, recordEmailChange, setLogo, getLogo, purgeTenant, EMAIL_COOLDOWN_DAYS, _sha256: sha256
 };

@@ -29,6 +29,7 @@ const jwtFor = (tid, extra = {}) => {
 };
 const auth = (t) => ({ authorization: "Bearer " + t });
 const postJson = (url, body, headers) => fetch(base + url, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body || {}) });
+const post = (body, headers = {}) => fetch(base + "/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
 
 before(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "joule-set-"));
@@ -314,4 +315,102 @@ test("identity persistence failures never throw into a request", () => {
     assert.ok(k.key, "the key is still minted and usable in-memory during a DB outage");
     assert.equal(tenancy.resolveFromApiKey("Bearer " + k.key).id, T.id);
   } finally { tenancy.usePersistence(null); tenancy.reset(); }
+});
+
+// ---- §8 Profile: account settings ----
+const pfTok = () => { const T = tenancy.createTenant("pf"); return { T, tok: jwtFor(T.id, { email: "me@co.com" }) }; };
+
+test("email change is gated by a SERVER-side 30-day cooldown", async () => {
+  const { T, tok } = pfTok();
+  const uid = "u-" + T.id.slice(0, 6);   // jwtFor builds sub this way
+
+  const first = await postJson("/api/profile/email-change", {}, auth(tok));
+  assert.equal(first.status, 200, "first change is permitted");
+  assert.equal((await first.json()).allowed, true);
+
+  // confirm it happened -> the clock starts
+  const rec = await postJson("/api/profile/email-change", { confirm: true }, auth(tok));
+  assert.equal((await rec.json()).ok, true);
+
+  // a second attempt inside the window is REFUSED by the server, with the date
+  const second = await postJson("/api/profile/email-change", {}, auth(tok));
+  assert.equal(second.status, 429, "blocked inside the cooldown");
+  const body = await second.json();
+  assert.equal(body.allowed, false);
+  assert.ok(body.daysRemaining > 0 && body.daysRemaining <= 30);
+  assert.match(body.message, /You can change your email again on/);
+
+  // and the state is reflected on /api/profile
+  const prof = await (await fetch(base + "/api/profile", { headers: auth(tok) })).json();
+  assert.equal(prof.emailChange.allowed, false);
+  assert.equal(prof.emailChange.cooldownDays, 30);
+  assert.equal(tenancy.emailChangeState(uid).allowed, false, "cooldown is keyed to the user");
+});
+
+test("the server never handles passwords, and states billing honestly", async () => {
+  const { tok } = pfTok();
+  const prof = await (await fetch(base + "/api/profile", { headers: auth(tok) })).json();
+  // no password field anywhere in the account payload
+  assert.ok(!/password/i.test(JSON.stringify(prof)), "no password is stored or returned");
+  // billing is not faked
+  assert.equal(prof.subscription.billingConfigured, false);
+  assert.match(prof.subscription.note, /isn't connected/i);
+  // the UI performs email/password changes against the managed provider, not our server
+  const html = fs.readFileSync(path.join(__dirname, "..", "public", "index.html"), "utf8");
+  const js = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join("\n");
+  assert.match(js, /auth\/v1\/user/, "changes go through the auth provider's endpoint");
+  assert.match(js, /grant_type=password/, "current password is re-authenticated before a change");
+  assert.match(js, /never sees or stores it/i, "and the UI says so");
+});
+
+test("logo upload validates type and size, and is tenant-scoped", async () => {
+  const { T, tok } = pfTok();
+  const png = "data:image/png;base64," + Buffer.from("fake-png-bytes").toString("base64");
+
+  assert.equal((await postJson("/api/profile/logo", { dataUrl: "not-an-image" }, auth(tok))).status, 400, "rejects non-images");
+  assert.equal((await postJson("/api/profile/logo", { dataUrl: "data:application/pdf;base64,AAAA" }, auth(tok))).status, 400, "rejects disallowed types");
+  const huge = "data:image/png;base64," + "A".repeat(400 * 1024);
+  assert.equal((await postJson("/api/profile/logo", { dataUrl: huge }, auth(tok))).status, 413, "rejects oversized images");
+
+  assert.equal((await postJson("/api/profile/logo", { dataUrl: png }, auth(tok))).status, 200, "accepts a valid PNG");
+  assert.equal(tenancy.getLogo(T.id), png, "stored for this tenant");
+
+  // another workspace does not inherit it
+  const other = tenancy.createTenant("other");
+  assert.equal(tenancy.getLogo(other.id), null, "logo is tenant-scoped");
+
+  // and it is exposed for the sidebar, then removable
+  const me = await (await fetch(base + "/api/me", { headers: auth(tok) })).json();
+  assert.equal(me.branding.logo, png);
+  await fetch(base + "/api/profile/logo", { method: "DELETE", headers: auth(tok) });
+  assert.equal(tenancy.getLogo(T.id), null, "removable, falls back to the Joule mark");
+});
+
+test("account deletion requires typed confirmation and removes everything for that tenant only", async () => {
+  const A = tenancy.createTenant("gone"), B = tenancy.createTenant("stays");
+  const tokA = jwtFor(A.id, { email: "a@co.com" });
+  const keyA = tenancy.mintKey(A.id, "k").key, keyB = tenancy.mintKey(B.id, "k").key;
+  tenancy.setUpstreamKey(A.id, "sk-a"); tenancy.setUpstreamKey(B.id, "sk-b");
+  for (let i = 0; i < 3; i++) await post({ model: "auto", messages: [{ role: "user", content: "a" + i }] }, auth(keyA));
+  await post({ model: "auto", messages: [{ role: "user", content: "b" }] }, auth(keyB));
+
+  // wrong confirmation is refused
+  assert.equal((await postJson("/api/profile/delete", { confirm: "yes" }, auth(tokA))).status, 400);
+  assert.equal(store.all(A.id).length, 3, "nothing deleted without the typed confirmation");
+
+  const del = await postJson("/api/profile/delete", { confirm: "DELETE", reason: "Too expensive" }, auth(tokA));
+  assert.equal(del.status, 200);
+  const d = await del.json();
+  assert.equal(d.removedRecords, 3, "A's request log is gone");
+  assert.ok(d.revokedKeys >= 1, "A's keys are gone");
+  assert.match(d.authAccountNote, /authentication provider/i, "honest about what we cannot delete");
+
+  assert.equal(store.all(A.id).length, 0, "A has no records left");
+  assert.equal(tenancy.getUpstreamKey(A.id), null, "A's provider key is gone");
+  assert.equal(tenancy.resolveFromApiKey("Bearer " + keyA), null, "A's key no longer authenticates");
+
+  // B is completely untouched
+  assert.equal(store.all(B.id).length, 1, "B's data survives");
+  assert.equal(tenancy.getUpstreamKey(B.id), "sk-b", "B's provider key survives");
+  assert.equal(tenancy.resolveFromApiKey("Bearer " + keyB).id, B.id, "B's key still works");
 });
