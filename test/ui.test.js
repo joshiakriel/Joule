@@ -78,7 +78,12 @@ test("honesty rules survive the redesign", () => {
   assert.match(js, /not yet a guarantee/, "insufficient-samples wording retained");
   assert.ok(!/chart\.js|d3|recharts|plotly/i.test(html), "still no chart library");
   const code = js.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  assert.ok(!/localStorage|sessionStorage|document\.cookie/.test(code), "no browser storage of anything sensitive");
+  // localStorage and cookies stay forbidden. sessionStorage is permitted for exactly ONE
+  // thing — the refresh token — so a page refresh doesn't force a re-login. The access
+  // token itself still never leaves memory.
+  assert.ok(!/localStorage|document\.cookie/.test(code), "never localStorage, never cookies");
+  assert.ok(!/sessionStorage\.setItem\((?!SESSION_KEY)/.test(code), "sessionStorage stores only the session key");
+  assert.match(code, /let ACCESS_TOKEN = null/, "the access token is still memory-only");
 });
 
 test("the test console is a utility inside Activity, not the front door", () => {
@@ -108,4 +113,32 @@ test("the app shell is a real sidebar + top bar, not one flat scroll", () => {
   assert.match(html, /--cyan:#33E3C7/, "primary accent");
   assert.match(html, /--brand-blue:#2D87AE/, "secondary accent");
   assert.match(html, /--amber:#FFB233/, "warning accent");
+});
+
+test("every view renderer targets an element id that actually exists", () => {
+  // Reports rendered blank in production because the markup was renamed to
+  // id="reportsBody" while paintDocs() still looked up gel("docsBody"). gel() returns
+  // null, the function returns early, and the page fails SILENTLY — no error anywhere.
+  const ids = new Set([...html.matchAll(/id="([^"]+)"/g)].map((m) => m[1]));
+  const looked = [...js.matchAll(/\bgel\("([^"]+)"\)/g)].map((m) => m[1]);
+  const missing = [...new Set(looked)].filter((id) => !ids.has(id));
+  assert.deepEqual(missing, [], `these ids are looked up in JS but do not exist in the markup: ${missing.join(", ")}`);
+});
+
+test("each view has a renderer and a render target", () => {
+  for (const [view, fn, target] of [
+    ["overview", "paintValue", "heroHost"],
+    ["reports", "paintDocs", "reportsBody"],
+    ["settings", "paintStatus", "statusBody"],
+    ["profile", "paintProfile", "profileBody"]
+  ]) {
+    // plain string checks — building regexes from template literals silently eats the
+    // backslashes (\s becomes s), which is how this test passed a broken pattern once
+    const dispatch = js.slice(js.indexOf(`if (v === "${view}")`));
+    assert.ok(js.includes(`if (v === "${view}")`), `showView dispatches ${view}`);
+    assert.ok(dispatch.slice(0, 160).includes(`${fn}()`), `${view} calls ${fn}()`);
+    assert.ok(js.includes(`function ${fn}`), `${fn} is defined`);
+    assert.ok(html.includes(`id="${target}"`), `${target} exists in the markup`);
+    assert.ok(js.includes(`gel("${target}")`), `${fn} renders into ${target}`);
+  }
 });

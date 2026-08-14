@@ -210,11 +210,15 @@ test("dashboard HTML wires auth + onboarding correctly (no client-side secret st
   const js = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join("\n");
   // every inline script must parse — a syntax error here silently bricks the whole dashboard
   assert.doesNotThrow(() => new Function(js), "dashboard JS parses");
-  // CONSTRAINT: no browser storage of anything security-related. Strip comments first so
-  // this asserts on real CODE (a comment mentioning localStorage is not a violation).
+  // CONSTRAINT: the ACCESS token is never persisted, and localStorage/cookies are never
+  // used. sessionStorage holds ONLY the refresh token (tab-scoped, cleared on close) so a
+  // page refresh doesn't force a re-login. Strip comments first so this asserts on real
+  // CODE — a comment mentioning localStorage is not a violation.
   const code = js.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  assert.ok(!/localStorage|sessionStorage|document\.cookie/.test(code), "token is never persisted to browser storage");
-  assert.match(js, /let ACCESS_TOKEN = null/, "token held in memory only");
+  assert.ok(!/localStorage|document\.cookie/.test(code), "never localStorage, never cookies");
+  assert.ok(!/sessionStorage\.setItem\((?!SESSION_KEY)/.test(code), "sessionStorage stores only the session key");
+  assert.ok(!/setItem\([^)]*access_token/.test(code), "the access token itself is never persisted");
+  assert.match(js, /let ACCESS_TOKEN = null/, "access token held in memory only");
   // the wizard + activation path exists and is driven by the real endpoints
   for (const ep of ["/api/auth-config", "/api/me", "/api/onboarding", "/api/provider-key", "/api/keys"]) {
     assert.ok(js.includes(ep), `dashboard calls ${ep}`);
