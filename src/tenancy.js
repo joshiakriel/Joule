@@ -312,6 +312,7 @@ function encKey() {
 }
 function setUpstreamKey(tenantId, plaintext) {
   ensureTenant(tenantId, tenantId);
+  undecryptable.delete(tenantId);
   if (!plaintext) { secretsByTenant.delete(tenantId); persist("persistTenantSecret", tenantId, null); return; }
   const iv = crypto.randomBytes(12);
   const c = crypto.createCipheriv("aes-256-gcm", encKey(), iv);
@@ -327,7 +328,32 @@ function getUpstreamKey(tenantId) {
     const d = crypto.createDecipheriv("aes-256-gcm", encKey(), Buffer.from(s.iv, "hex"));
     d.setAuthTag(Buffer.from(s.tag, "hex"));
     return Buffer.concat([d.update(Buffer.from(s.data, "hex")), d.final()]).toString("utf8");
-  } catch { return null; }
+  } catch (e) {
+    // A STORED-BUT-UNREADABLE key is not the same as no key. Returning null for both made
+    // a changed JOULE_ENC_KEY look like "never configured", which silently restarted
+    // onboarding on every login. Log it loudly and let callers tell the two apart via
+    // providerKeyState(). The ciphertext is left intact — only re-entry can fix it.
+    if (!undecryptable.has(tenantId)) {
+      undecryptable.add(tenantId);
+      console.error(`[tenancy] stored provider key for tenant ${tenantId} cannot be decrypted — JOULE_ENC_KEY has changed or is not set. The tenant must re-enter their provider key.`);
+    }
+    return null;
+  }
+}
+const undecryptable = new Set();
+
+/**
+ * Why a tenant has no usable provider key:
+ *   "ok"          — a key is stored and decrypts
+ *   "none"        — nothing stored; genuine first-time setup
+ *   "unreadable"  — a key IS stored but the encryption key no longer matches it
+ * The last case is the one worth naming: it looks identical to "none" from the outside,
+ * and telling a user to "add your provider key" when theirs is sitting there undecryptable
+ * is both confusing and wrong.
+ */
+function providerKeyState(tenantId) {
+  if (!secretsByTenant.has(tenantId)) return "none";
+  return getUpstreamKey(tenantId) ? "ok" : "unreadable";
 }
 
 reset();
@@ -336,5 +362,5 @@ module.exports = {
   DEFAULT_TENANT_ID, reset, ensureTenant, createTenant, getTenant, defaultTenant, attachUser,
   mintKey, revokeKey, listKeys, resolveFromApiKey, resolveFromJwt, verifyJwt,
   setUpstreamKey, getUpstreamKey, diagnoseJwt, tenantIdForUser, usePersistence, hydrate,
-  emailChangeState, recordEmailChange, setLogo, getLogo, purgeTenant, EMAIL_COOLDOWN_DAYS, _sha256: sha256
+  emailChangeState, recordEmailChange, setLogo, getLogo, purgeTenant, EMAIL_COOLDOWN_DAYS, providerKeyState, _sha256: sha256
 };

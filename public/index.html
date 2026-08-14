@@ -679,6 +679,7 @@ button,.tab,.gs-btn,.tb-danger,a.tab{font-family:var(--sans);border-radius:10px;
     <!-- STEP 1 -->
     <div class="wstep" id="wstep1">
       <h3>1 · Add your provider key</h3>
+      <div id="provBanner" style="display:none"></div>
       <div class="why">Paste your OpenAI, Anthropic or Groq key. Joule holds it <b>server-side, encrypted</b>, and uses it to make your model calls — it is never written to logs and never sent back to your browser. We verify it now with a free <span class="mono">/models</span> check so you don't discover a typo in production.</div>
       <div class="fld"><label for="provKey">Provider API key</label><input id="provKey" type="password" placeholder="sk-…" autocomplete="off"></div>
       <div class="fld"><label for="provBase">Provider base URL</label><input id="provBase" type="text" placeholder="https://api.openai.com/v1"></div>
@@ -1058,7 +1059,12 @@ function showStep(n) {
   if (n === 3) startPolling(); else stopPolling();
 }
 
-function openWizard(step) { gel("wizGate").style.display = "flex"; showStep(step); }
+function openWizard(step) {
+  const b = providerKeyBanner();
+  const host = gel("provBanner");
+  if (host) { host.innerHTML = b; host.style.display = b ? "block" : "none"; }
+  gel("wizGate").style.display = "flex"; showStep(step);
+}
 function closeWizard() { stopPolling(); gel("wizGate").style.display = "none"; }
 
 // STEP 1 — verify + store the provider key
@@ -1144,6 +1150,15 @@ function paintAccount() {
   nm.textContent = email || "Your workspace";
   sb.textContent = (ME && ME.tenant) ? "workspace " + String(ME.tenant.id).slice(0, 8) : "signed in";
   av.textContent = (email ? email[0] : "J").toUpperCase();
+}
+
+// A stored-but-undecryptable provider key looks identical to "never configured". Say which.
+function providerKeyBanner() {
+  const st = ME && ME.onboarding && ME.onboarding.providerKeyState;
+  if (st !== "unreadable") return "";
+  return '<div class="warn-once" style="margin-bottom:14px">Your provider key is saved, but this deployment can no longer decrypt it — ' +
+    'the encryption key (JOULE_ENC_KEY) has changed or is missing. Re-enter your provider key below to fix it. ' +
+    'Your usage history and savings are unaffected.</div>';
 }
 
 async function startApp() {

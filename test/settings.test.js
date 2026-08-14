@@ -414,3 +414,43 @@ test("account deletion requires typed confirmation and removes everything for th
   assert.equal(tenancy.getUpstreamKey(B.id), "sk-b", "B's provider key survives");
   assert.equal(tenancy.resolveFromApiKey("Bearer " + keyB).id, B.id, "B's key still works");
 });
+
+// ---- provider key: stored-but-undecryptable must not masquerade as "never configured" ----
+// This is why the setup wizard reappeared on every login for a configured workspace: the
+// decrypt failure returned null, which onboarding read as "no provider key".
+test("a key that cannot be decrypted reports 'unreadable', not 'none'", async () => {
+  const T = tenancy.createTenant("enc-rot");
+  const tok = jwtFor(T.id, { email: "e@co.com" });
+  const savedEnc = config.auth.encKey;
+  try {
+    config.auth.encKey = "original-encryption-key";
+    tenancy.setUpstreamKey(T.id, "sk-provider-abc");
+    assert.equal(tenancy.providerKeyState(T.id), "ok");
+    assert.equal(tenancy.getUpstreamKey(T.id), "sk-provider-abc");
+
+    // the operator rotates JOULE_ENC_KEY — the ciphertext is now undecryptable
+    config.auth.encKey = "a-different-encryption-key";
+    assert.equal(tenancy.getUpstreamKey(T.id), null, "it genuinely cannot be used");
+    assert.equal(tenancy.providerKeyState(T.id), "unreadable", "but it is NOT 'none' — a key IS stored");
+
+    // onboarding says so, so the UI can explain instead of silently restarting setup
+    const me = await (await fetch(base + "/api/me", { headers: auth(tok) })).json();
+    assert.equal(me.onboarding.providerKeyState, "unreadable");
+    assert.equal(me.onboarding.steps.providerKey, false, "still blocks completion — it must be re-entered");
+    assert.equal(me.provider.state, "unreadable");
+    assert.ok(!JSON.stringify(me).includes("sk-provider-abc"), "the key is still never returned");
+
+    // re-entering a key clears the condition
+    config.auth.encKey = "a-different-encryption-key";
+    tenancy.setUpstreamKey(T.id, "sk-provider-new");
+    assert.equal(tenancy.providerKeyState(T.id), "ok");
+    assert.equal(tenancy.getUpstreamKey(T.id), "sk-provider-new");
+  } finally { config.auth.encKey = savedEnc; }
+});
+
+test("a workspace that never set a key reports 'none' (genuine first-time setup)", async () => {
+  const T = tenancy.createTenant("fresh-ws");
+  assert.equal(tenancy.providerKeyState(T.id), "none");
+  const me = await (await fetch(base + "/api/me", { headers: auth(jwtFor(T.id, { email: "f@co.com" })) })).json();
+  assert.equal(me.onboarding.providerKeyState, "none");
+});

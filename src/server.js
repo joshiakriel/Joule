@@ -701,10 +701,13 @@ app.get("/api/auth-config", (_req, res) => res.json({
 function onboardingState(tenantId) {
   const requests = store.all(tenantId).length;
   const keys = tenancy.listKeys(tenantId).filter((k) => !k.revoked);
-  const hasProviderKey = Boolean(tenancy.getUpstreamKey(tenantId));
+  const keyState = tenancy.providerKeyState(tenantId);   // "ok" | "none" | "unreadable"
+  const hasProviderKey = keyState === "ok";
   return {
     steps: { providerKey: hasProviderKey, jouleKey: keys.length > 0, firstRequest: requests > 0 },
     complete: hasProviderKey && keys.length > 0 && requests > 0,
+    // a stored-but-undecryptable key is NOT "never set up" — the UI must say which it is
+    providerKeyState: keyState,
     requests,
     // dryRun workspaces can complete without a provider key (synthesized answers)
     dryRun: config.dryRun
@@ -725,7 +728,7 @@ app.get("/api/me", (req, res) => {
     // whether one is set, its last 4, and which endpoint it points at.
     provider: (() => {
       const k = tenancy.getUpstreamKey(tenantId);
-      return { connected: Boolean(k), last4: k ? k.slice(-4) : null, baseUrl: config.upstreamBaseUrl };
+      return { connected: Boolean(k), last4: k ? k.slice(-4) : null, baseUrl: config.upstreamBaseUrl, state: tenancy.providerKeyState(tenantId) };
     })(),
     branding: { logo: tenancy.getLogo(tenantId) },
     onboarding: onboardingState(tenantId),
