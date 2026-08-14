@@ -2309,6 +2309,8 @@ async function paintProfile() {
       '<p>Signed in as <b>' + esc(P.user.email || "unknown") + '</b>' +
       (P.tenant.id ? ' &middot; workspace <span class="mono">' + esc(String(P.tenant.id).slice(0, 8)) + '</span>' : '') + '</p>' +
       (canAuth ? '' : '<div class="mini-empty" style="margin-top:14px"><span class="me-i">&#9888;</span><span>Sign-in provider isn\'t configured on this deployment, so email and password changes are unavailable here.</span></div>') +
+      '<div class="run" style="margin-top:16px"><button class="tab" id="pfSignOut" type="button">Sign out</button>' +
+      '<span class="plan-note">Ends this session everywhere on this browser.</span></div>' +
     '</div>' +
 
     // ---- email (30-day cooldown) ----
@@ -2382,6 +2384,18 @@ async function paintProfile() {
 }
 
 function wireProfile(canAuth) {
+  // --- sign out: clear the httpOnly cookie server-side, drop the in-memory token,
+  // stop the silent-renew timer, then reload so no signed-in state can linger ---
+  const so = gel("pfSignOut");
+  if (so) so.onclick = async () => {
+    so.disabled = true; so.textContent = "Signing out…";
+    try { clearTimeout(window.__jouleRenew); } catch (e) {}
+    await clearSession();          // POST /api/auth/logout -> expires the refresh cookie
+    ME = null; PROFILE = null;
+    location.hash = "";
+    location.reload();
+  };
+
   // --- email: ask the server for permission, change via the provider, then confirm ---
   const eBtn = gel("pfEmailSave");
   if (eBtn) eBtn.onclick = async () => {

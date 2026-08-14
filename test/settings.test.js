@@ -578,3 +578,28 @@ test("the browser stores NO credential of any kind", () => {
   assert.match(code, /credentials: "same-origin"/, "the httpOnly cookie rides on same-origin requests");
   assert.match(code, /\/api\/auth\/refresh/, "the session is restored from the cookie");
 });
+
+test("sign-out exists, clears the session cookie, and leaves no way back in", async () => {
+  // There was no sign-out control at all: the logout endpoint existed but nothing called
+  // it, so a signed-in user could not end their session from the UI.
+  const html = fs.readFileSync(path.join(__dirname, "..", "public", "index.html"), "utf8");
+  const js = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join("\n");
+  assert.match(js, /id="pfSignOut"/, "a Sign out control is rendered on Profile");
+  const h = js.slice(js.indexOf('gel("pfSignOut")'), js.indexOf('gel("pfSignOut")') + 500);
+  assert.match(h, /clearSession\(\)/, "it clears the session");
+  assert.match(h, /location\.reload\(\)/, "and reloads so no signed-in state lingers");
+  assert.match(h, /__jouleRenew/, "and cancels the silent-renew timer");
+  // clearSession must hit the server so the httpOnly cookie is actually expired —
+  // the browser cannot clear it itself, which is the whole point of httpOnly
+  const cs = js.slice(js.indexOf("async function clearSession"), js.indexOf("async function clearSession") + 300);
+  assert.match(cs, /\/api\/auth\/logout/, "logout is server-side");
+  assert.match(cs, /ACCESS_TOKEN = null/, "and the in-memory token is dropped");
+
+  // the endpoint itself expires the cookie
+  const out = await fetch(base + "/api/auth/logout", { method: "POST" });
+  assert.equal(out.status, 200);
+  const c = out.headers.get("set-cookie") || "";
+  assert.match(c, /joule_rt=/, "the session cookie is addressed");
+  assert.match(c, /Max-Age=0/, "and expired");
+  assert.match(c, /HttpOnly/i, "still httpOnly while being cleared");
+});
