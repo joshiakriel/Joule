@@ -81,14 +81,22 @@ function scrub(s) {
 store.init();
 // The Postgres backend loads the log asynchronously; seed budget only once it's in
 // memory. Memory backend resolves immediately, so this is a no-op wait there.
+let identityHealth = { ok: null, tenants: 0, keys: 0, secrets: 0, error: null };
 const storeReady = store.ready().then(async () => {
   // identity (tenants, API keys, encrypted provider keys) is durable on the postgres
   // backend — load it back BEFORE accepting traffic so keys survive a restart/redeploy.
   tenancy.usePersistence(store.durable());
   try {
     const h = await tenancy.hydrate();
+    identityHealth = { ok: true, ...h, error: null };
     if (h.keys || h.secrets) console.log(`  identity restored: ${h.tenants} tenant(s), ${h.keys} key(s), ${h.secrets} provider secret(s)`);
-  } catch (e) { console.error("identity hydrate error:", e && e.message); }
+  } catch (e) {
+    // A failed hydrate means NO keys and NO provider secrets are restored — every tenant
+    // then looks unconfigured. That must never be a quiet log line the service boots past.
+    identityHealth = { ok: false, tenants: 0, keys: 0, secrets: 0, error: e && e.message ? e.message : String(e) };
+    console.error("IDENTITY HYDRATE FAILED —", identityHealth.error);
+    console.error("  API keys and stored provider keys will appear MISSING until this is fixed (check migrations).");
+  }
   verify.init();            // load calibration + migrate existing judge scores
   budget.init(store.all()); // seed committed spend from the log
 });
@@ -1266,6 +1274,7 @@ app.get("/api/health", async (_req, res) => {
     ok: true, version: "0.1.0", dryRun: config.dryRun, otel: otel.status(),
     components: {
       db: { backend: db.backend, status: db.status, pendingWrites: db.pendingWrites || 0 },
+      identity: identityHealth,
       provider: prov,
       grid
     }

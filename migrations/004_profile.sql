@@ -12,12 +12,20 @@ ALTER TABLE tenants ADD COLUMN IF NOT EXISTS logo TEXT;
 
 -- Loaders must read across tenants at boot (RLS forbids that), same SECURITY DEFINER
 -- pattern as app_load_records / app_load_tenants.
-CREATE OR REPLACE FUNCTION app_load_tenants()
+--
+-- IMPORTANT: these two already exist from migration 003 with a NARROWER return type, and
+-- Postgres refuses to change a function's return type via CREATE OR REPLACE ("cannot change
+-- return type of existing function"). They must be DROPped first. Because each migration
+-- file is executed as a single multi-statement query, one failed statement rolls the whole
+-- file back — which is why the ALTER TABLEs above silently never applied either.
+DROP FUNCTION IF EXISTS app_load_tenants();
+CREATE FUNCTION app_load_tenants()
   RETURNS TABLE(id UUID, name TEXT, logo TEXT) LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$
     SELECT id, name, logo FROM tenants;
 $$;
 
-CREATE OR REPLACE FUNCTION app_load_users()
+DROP FUNCTION IF EXISTS app_load_users();
+CREATE FUNCTION app_load_users()
   RETURNS TABLE(id UUID, tenant_id UUID, email TEXT, email_changed_at TIMESTAMPTZ)
   LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$
     SELECT id, tenant_id, email, email_changed_at FROM users;
