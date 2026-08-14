@@ -498,3 +498,83 @@ test("a secret encrypted under a key we no longer have is reported, never silent
     assert.equal(tenancy.getUpstreamKey(T.id), "sk-lost", "JOULE_ENC_KEY_PREVIOUS recovers it");
   } finally { config.auth.encKey = saved.cur; config.auth.encKeyPrevious = saved.prev; }
 });
+
+// ---- session: httpOnly refresh cookie ----
+test("the refresh cookie is httpOnly, SameSite=Strict and path-scoped", async () => {
+  const savedUrl = config.auth.supabaseUrl, savedAnon = config.auth.supabaseAnonKey;
+  const realFetch = global.fetch;
+  try {
+    config.auth.supabaseUrl = "https://proj.supabase.co";
+    config.auth.supabaseAnonKey = "anon";
+    // stub the auth provider's refresh exchange
+    global.fetch = async (url, opts) => {
+      if (String(url).includes("/auth/v1/token")) {
+        const body = JSON.parse(opts.body);
+        if (body.refresh_token === "good-rt") {
+          return { ok: true, status: 200, json: async () => ({ access_token: "fresh-at", refresh_token: "rotated-rt", expires_in: 3600 }) };
+        }
+        return { ok: false, status: 400, json: async () => ({}) };
+      }
+      return realFetch(url, opts);
+    };
+
+    const r = await realFetch(base + "/api/auth/session", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ refresh_token: "good-rt" })
+    });
+    assert.equal(r.status, 200);
+    const body = await r.json();
+    assert.equal(body.access_token, "fresh-at", "the access token comes back for in-memory use");
+    assert.ok(!("refresh_token" in body), "the refresh token is NEVER returned to the browser");
+
+    const cookie = r.headers.get("set-cookie") || "";
+    assert.match(cookie, /joule_rt=/, "session cookie is set");
+    assert.match(cookie, /HttpOnly/i, "httpOnly — script cannot read it");
+    assert.match(cookie, /SameSite=Strict/i, "SameSite=Strict — closes the CSRF hole a cookie opens");
+    assert.match(cookie, /Path=\/api\/auth/i, "scoped to the session endpoints only");
+    assert.match(cookie, /rotated-rt/, "stores the ROTATED token the provider returned");
+
+    // refresh with the cookie yields a new access token and rotates the cookie
+    const rt = /joule_rt=([^;]+)/.exec(cookie)[1];
+    const ref = await realFetch(base + "/api/auth/refresh", { method: "POST", headers: { cookie: "joule_rt=" + rt } });
+    assert.equal(ref.status, 401, "a rotated-away token is no longer accepted by the provider stub");
+
+    // without a cookie there is no session at all
+    const none = await realFetch(base + "/api/auth/refresh", { method: "POST" });
+    assert.equal(none.status, 401);
+    assert.match((await none.json()).message, /no session/i);
+
+    // logout expires the cookie
+    const out = await realFetch(base + "/api/auth/logout", { method: "POST" });
+    assert.match(out.headers.get("set-cookie") || "", /Max-Age=0/, "logout expires the cookie");
+  } finally {
+    global.fetch = realFetch;
+    config.auth.supabaseUrl = savedUrl; config.auth.supabaseAnonKey = savedAnon;
+  }
+});
+
+test("a junk refresh token is verified and refused before any cookie is stored", async () => {
+  const savedUrl = config.auth.supabaseUrl, savedAnon = config.auth.supabaseAnonKey;
+  const realFetch = global.fetch;
+  try {
+    config.auth.supabaseUrl = "https://proj.supabase.co"; config.auth.supabaseAnonKey = "anon";
+    global.fetch = async (url, opts) => String(url).includes("/auth/v1/token")
+      ? { ok: false, status: 400, json: async () => ({}) } : realFetch(url, opts);
+    const r = await realFetch(base + "/api/auth/session", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ refresh_token: "junk" })
+    });
+    assert.equal(r.status, 401, "unverifiable session refused");
+    assert.match(r.headers.get("set-cookie") || "", /Max-Age=0/, "and no live cookie is left behind");
+  } finally { global.fetch = realFetch; config.auth.supabaseUrl = savedUrl; config.auth.supabaseAnonKey = savedAnon; }
+});
+
+test("the browser stores NO credential of any kind", () => {
+  const html = fs.readFileSync(path.join(__dirname, "..", "public", "index.html"), "utf8");
+  const js = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join("\n");
+  const code = js.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  assert.ok(!/localStorage/.test(code), "no localStorage");
+  assert.ok(!/sessionStorage/.test(code), "no sessionStorage");
+  assert.ok(!/document\.cookie/.test(code), "the page never reads or writes cookies itself");
+  assert.match(code, /let ACCESS_TOKEN = null/, "only the short-lived access token, in memory");
+  assert.match(code, /credentials: "same-origin"/, "the httpOnly cookie rides on same-origin requests");
+  assert.match(code, /\/api\/auth\/refresh/, "the session is restored from the cookie");
+});

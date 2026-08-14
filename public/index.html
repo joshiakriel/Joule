@@ -964,38 +964,51 @@ button,.tab,.gs-btn,.tb-danger,a.tab{font-family:var(--sans);border-radius:10px;
 <script>
 /* =====================================================================
    Phase 1.2 — auth + self-serve onboarding.
-   SECURITY: the access token lives in a module-scoped variable ONLY. It is never
-   written to localStorage/sessionStorage/cookies, so it can't be read by injected
-   script or survive the tab. Trade-off: a refresh means signing in again.
+   SECURITY: the access token lives in a module-scoped variable ONLY and is never written
+   to any browser storage. The long-lived refresh token is held by OUR server in an
+   httpOnly cookie this script cannot read, so a refresh restores the session without
+   ever exposing a credential to injected script.
    ===================================================================== */
 let ACCESS_TOKEN = null;      // the access token itself stays in memory
 let AUTH_CFG = { authRequired: false, configured: false };
 let ME = null;
 
-/* SESSION PERSISTENCE.
-   The access token stays in memory. Only the REFRESH token is persisted, and only in
-   sessionStorage — scoped to this tab, cleared when the tab closes, never shared with
-   other tabs and never written to localStorage. On load we exchange it for a fresh
-   access token, so a page refresh no longer forces a re-login.
-   Tradeoff, stated plainly: anything persisted in the browser is readable by injected
-   script. The stronger option is an httpOnly refresh cookie issued by our own server;
-   that is the upgrade path if we want it. */
-const SESSION_KEY = "joule.rt";
-function saveSession(d) {
-  try { if (d && d.refresh_token) sessionStorage.setItem(SESSION_KEY, d.refresh_token); } catch (e) {}
-}
-function clearSession() { try { sessionStorage.removeItem(SESSION_KEY); } catch (e) {} ACCESS_TOKEN = null; }
-async function restoreSession() {
-  let rt = null;
-  try { rt = sessionStorage.getItem(SESSION_KEY); } catch (e) {}
-  if (!rt || !AUTH_CFG.supabaseUrl) return false;
+/* SESSION — httpOnly refresh cookie.
+   The refresh token is handed to OUR server once after sign-in and stored in an httpOnly,
+   SameSite=Strict, Path=/api/auth cookie that this script cannot read. Only the
+   short-lived access token lives here, in memory. Nothing security-related is written to
+   localStorage, sessionStorage or any readable cookie. A page refresh silently re-obtains
+   an access token from the cookie, so it no longer forces a re-login. */
+async function saveSession(d) {
+  if (!d || !d.refresh_token) return false;
   try {
-    const d = await supabaseAuth("token?grant_type=refresh_token", { refresh_token: rt });
-    if (!d || !d.access_token) { clearSession(); return false; }
-    ACCESS_TOKEN = d.access_token;
-    saveSession(d);                     // refresh tokens rotate — keep the newest
+    const r = await _fetch("/api/auth/session", {
+      method: "POST", credentials: "same-origin",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ refresh_token: d.refresh_token })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.access_token) { ACCESS_TOKEN = j.access_token; return true; }
+  } catch (e) {}
+  return false;
+}
+async function clearSession() {
+  ACCESS_TOKEN = null;
+  try { await _fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }); } catch (e) {}
+}
+async function restoreSession() {
+  try {
+    const r = await _fetch("/api/auth/refresh", { method: "POST", credentials: "same-origin" });
+    if (!r.ok) return false;
+    const j = await r.json().catch(() => ({}));
+    if (!j.access_token) return false;
+    ACCESS_TOKEN = j.access_token;
+    // Renew a little before expiry so a long session never dies mid-use.
+    const ms = Math.max(60, (j.expires_in || 3600) - 120) * 1000;
+    clearTimeout(window.__jouleRenew);
+    window.__jouleRenew = setTimeout(restoreSession, ms);
     return true;
-  } catch (e) { clearSession(); return false; }
+  } catch (e) { return false; }
 }
 
 // Transparently attach the session token to same-origin API calls, so every existing
@@ -1059,7 +1072,7 @@ gel("authForm").onsubmit = async (e) => {
       return;
     }
     ACCESS_TOKEN = data.access_token;
-    saveSession(data);                 // survive a page refresh
+    await saveSession(data);           // hand the refresh token to our server (httpOnly cookie)
     gel("authGate").style.display = "none";
     await startApp();
   } catch (err) {
@@ -2440,7 +2453,7 @@ function wireProfile(canAuth) {
       gel("profileBody").innerHTML = '<div class="card"><h2>Account deleted</h2>' +
         '<p>Your workspace and all of its data are gone: ' + d.removedRecords + ' request record(s) and ' + d.revokedKeys + ' API key(s) removed.</p>' +
         '<p class="plan-note">' + esc(d.authAccountNote) + '</p></div>';
-      clearSession();
+      await clearSession();
     } catch (e) { showMsg("pfDelMsg", "Deletion failed. Try again."); go.disabled = false; }
   };
 }

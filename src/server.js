@@ -151,7 +151,10 @@ function isOperator(ident) {
 function dashAuth(req, res, next) {
   // Public by design: liveness, and the browser bootstrap values the login screen needs
   // before anyone is signed in (Supabase URL + ANON key — never the service-role key).
-  if (req.path === "/health" || req.path === "/auth-config") return next();
+  // Public by design: liveness, the login screen's bootstrap values, and the session
+  // endpoints themselves — they ESTABLISH the token that authenticates everything else,
+  // so they cannot require it. They are protected by the httpOnly cookie + SameSite.
+  if (req.path === "/health" || req.path === "/auth-config" || req.path.startsWith("/auth/")) return next();
   const t = tenancy.resolveFromJwt(req.get("authorization"));
   if (t) { req.tenant = t; req.isOperator = isOperator(t); return next(); }
   if (!config.auth.required) { req.tenant = tenancy.defaultTenant(); req.isOperator = true; return next(); }
@@ -902,6 +905,84 @@ app.post("/api/keys/:id/rotate", (req, res) => {
   tenancy.revokeKey(req.params.id);   // old key stops authenticating immediately
   res.status(201).json({ ok: true, key: minted.key, id: minted.id, last4: minted.last4, name: minted.name, revoked: req.params.id });
 });
+
+// ---- session: httpOnly refresh cookie ---------------------------------------
+/**
+ * The refresh token lives in an httpOnly cookie that browser script CANNOT read, and is
+ * exchanged server-side for a short-lived access token that only ever sits in memory.
+ * Nothing security-related is written to localStorage, sessionStorage or a readable cookie.
+ *
+ * What this buys, and what it does not:
+ *   + Injected script cannot exfiltrate the refresh token — the long-lived credential —
+ *     so one XSS cannot mint sessions after the tab is closed.
+ *   + SameSite=Strict means the cookie is never sent on a cross-site request, which closes
+ *     the CSRF hole that introducing a cookie would otherwise open.
+ *   + Path is scoped to /api/auth, so it is not attached to ordinary API traffic.
+ *   - It does NOT make XSS harmless: script running in the page can still call the API as
+ *     the user while the page is open. A cookie is not a substitute for not having XSS.
+ */
+const SESSION_COOKIE = "joule_rt";
+const cookiesOf = (req) => {
+  const out = {};
+  for (const part of String(req.headers.cookie || "").split(";")) {
+    const i = part.indexOf("=");
+    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return out;
+};
+function setSessionCookie(req, res, token, maxAgeSec) {
+  // Secure whenever the request arrived over TLS (Render terminates it and sets
+  // x-forwarded-proto), so plain-http local development still works.
+  const secure = req.secure || String(req.headers["x-forwarded-proto"] || "").split(",")[0] === "https";
+  const bits = [
+    `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
+    "HttpOnly", "SameSite=Strict", "Path=/api/auth",
+    `Max-Age=${Math.max(0, Math.floor(maxAgeSec))}`
+  ];
+  if (secure) bits.push("Secure");
+  res.append("Set-Cookie", bits.join("; "));
+}
+const clearSessionCookie = (req, res) => setSessionCookie(req, res, "", 0);
+
+// Exchange a refresh token with the auth provider, server-side, so it never has to be
+// readable by the browser. Returns null on any failure — never throws into a response.
+async function exchangeRefreshToken(refreshToken) {
+  if (!config.auth.supabaseUrl || !config.auth.supabaseAnonKey || !refreshToken) return null;
+  try {
+    const r = await fetch(config.auth.supabaseUrl.replace(/\/+$/, "") + "/auth/v1/token?grant_type=refresh_token", {
+      method: "POST",
+      headers: { "content-type": "application/json", apikey: config.auth.supabaseAnonKey },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+      signal: AbortSignal.timeout(15000)
+    });
+    if (!r.ok) return null;
+    const d = await r.json().catch(() => null);
+    return d && d.access_token ? d : null;
+  } catch { return null; }
+}
+
+// Hand the refresh token over ONCE, immediately after signing in with the auth provider.
+app.post("/api/auth/session", async (req, res) => {
+  const rt = typeof req.body?.refresh_token === "string" ? req.body.refresh_token.trim() : "";
+  if (!rt) return res.status(400).json({ ok: false, message: "No refresh token supplied." });
+  // Verify it before storing, so a junk value can never be parked in a cookie.
+  const d = await exchangeRefreshToken(rt);
+  if (!d) { clearSessionCookie(req, res); return res.status(401).json({ ok: false, message: "That session could not be verified." }); }
+  setSessionCookie(req, res, d.refresh_token || rt, 30 * 24 * 3600);
+  res.json({ ok: true, access_token: d.access_token, expires_in: d.expires_in || 3600 });
+});
+
+// Exchange the cookie for a fresh access token. The browser holds it in memory only.
+app.post("/api/auth/refresh", async (req, res) => {
+  const rt = cookiesOf(req)[SESSION_COOKIE];
+  if (!rt) return res.status(401).json({ ok: false, message: "No session." });
+  const d = await exchangeRefreshToken(rt);
+  if (!d) { clearSessionCookie(req, res); return res.status(401).json({ ok: false, message: "Session expired. Sign in again." }); }
+  if (d.refresh_token) setSessionCookie(req, res, d.refresh_token, 30 * 24 * 3600);   // rotation
+  res.json({ ok: true, access_token: d.access_token, expires_in: d.expires_in || 3600 });
+});
+
+app.post("/api/auth/logout", (req, res) => { clearSessionCookie(req, res); res.json({ ok: true }); });
 
 // ---- profile / account (§8) ------------------------------------------------
 // ACCOUNT settings live here; WORKSPACE settings live under /api/config + /api/provider-key.
