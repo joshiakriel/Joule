@@ -10,25 +10,34 @@
 -- keep them current. Boot must read ACROSS tenants, which RLS forbids, so the loader is
 -- SECURITY DEFINER — exactly the pattern app_load_records() already uses for the mirror.
 -- Idempotent: safe to run on every boot.
+--
+-- Every loader DROPs before CREATE. Migrations re-run in order on EVERY boot, so a later
+-- migration may already have widened one of these; CREATE OR REPLACE would then fail with
+-- "cannot change return type of existing function", abort this file, and prevent the later
+-- migration from running at all. Dropping first makes the sequence converge either way.
 
-CREATE OR REPLACE FUNCTION app_load_tenants()
+DROP FUNCTION IF EXISTS app_load_tenants();
+CREATE FUNCTION app_load_tenants()
   RETURNS TABLE(id UUID, name TEXT) LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$
     SELECT id, name FROM tenants;
 $$;
 
-CREATE OR REPLACE FUNCTION app_load_api_keys()
+DROP FUNCTION IF EXISTS app_load_api_keys();
+CREATE FUNCTION app_load_api_keys()
   RETURNS TABLE(id TEXT, tenant_id UUID, key_hash TEXT, last4 TEXT, name TEXT, revoked BOOLEAN, created_at TIMESTAMPTZ)
   LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$
     SELECT id, tenant_id, key_hash, last4, name, revoked, created_at FROM api_keys;
 $$;
 
-CREATE OR REPLACE FUNCTION app_load_tenant_secrets()
+DROP FUNCTION IF EXISTS app_load_tenant_secrets();
+CREATE FUNCTION app_load_tenant_secrets()
   RETURNS TABLE(tenant_id UUID, upstream_key_enc JSONB)
   LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$
     SELECT tenant_id, upstream_key_enc FROM tenant_secrets WHERE upstream_key_enc IS NOT NULL;
 $$;
 
-CREATE OR REPLACE FUNCTION app_load_users()
+DROP FUNCTION IF EXISTS app_load_users();
+CREATE FUNCTION app_load_users()
   RETURNS TABLE(id UUID, tenant_id UUID, email TEXT)
   LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$
     SELECT id, tenant_id, email FROM users;

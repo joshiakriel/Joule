@@ -42,19 +42,23 @@ test("migration files exist and are applied in a stable, sorted order", () => {
   for (const f of files) assert.match(f, /^\d{3}_/, `${f} is numbered so ordering is unambiguous`);
 });
 
-test("a function whose RETURN TYPE changes is DROPped before being recreated", () => {
+test("a function defined in several migrations DROPs before CREATE in EVERY definition", () => {
+  // Migrations re-run IN ORDER on every boot. If 004 widens a function that 003 defines
+  // narrowly, then on the NEXT boot 003 runs first and tries to narrow it back — Postgres
+  // rejects that, 003 aborts, and 004 never runs. So it is not enough for the *later*
+  // definition to drop: every definition of a multiply-defined function must drop first,
+  // or the sequence cannot converge. This is the exact failure that reached production.
   for (const [name, list] of definitions()) {
-    for (let i = 1; i < list.length; i++) {
-      const prev = list[i - 1], cur = list[i];
-      if (prev.ret === cur.ret) continue;                 // unchanged signature: replace is fine
-      // Postgres cannot change a return type in place — the redefinition MUST drop first,
-      // in the same file, before the CREATE.
-      const before = cur.sql.slice(0, cur.sql.indexOf("CREATE FUNCTION " + name) >= 0
-        ? cur.sql.indexOf("CREATE FUNCTION " + name)
-        : cur.sql.search(new RegExp("CREATE\\s+(OR\\s+REPLACE\\s+)?FUNCTION\\s+" + name)));
+    if (list.length < 2) continue;                       // defined once: CREATE OR REPLACE is fine
+    const shapes = new Set(list.map((d) => d.ret));
+    if (shapes.size === 1) continue;                     // same shape everywhere: harmless
+    for (const def of list) {
+      const at = def.sql.search(new RegExp("CREATE\\s+(OR\\s+REPLACE\\s+)?FUNCTION\\s+" + name));
+      const before = def.sql.slice(0, at);
       assert.match(before, new RegExp("DROP\\s+FUNCTION\\s+IF\\s+EXISTS\\s+" + name, "i"),
-        `${cur.file}: ${name}() changes its return type (${prev.ret} -> ${cur.ret}) so it must be ` +
-        `DROPped first — CREATE OR REPLACE cannot change a return type and would abort the whole file`);
+        `${def.file}: ${name}() is defined in ${list.length} migrations with differing return types, ` +
+        `so THIS definition must DROP it first. Otherwise a re-run in migration order hits ` +
+        `"cannot change return type of existing function", aborts the file, and blocks every later migration.`);
     }
   }
 });
