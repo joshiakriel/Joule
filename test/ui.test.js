@@ -142,3 +142,20 @@ test("each view has a renderer and a render target", () => {
     assert.ok(js.includes(`gel("${target}")`), `${fn} renders into ${target}`);
   }
 });
+
+test("every view has copy, so navigating to it cannot throw", () => {
+  // Profile rendered blank because VIEW_COPY had no "profile" entry: showView() threw at
+  // VIEW_COPY[v].t BEFORE reaching the renderer, so the panel appeared and stayed empty.
+  const views = /const VIEWS = \[([^\]]+)\]/.exec(js);
+  assert.ok(views, "VIEWS is declared");
+  const names = views[1].split(",").map((s) => s.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
+  const at = js.indexOf("const VIEW_COPY");
+  const copy = js.slice(at, js.indexOf("};", at) + 2);   // just the object literal
+  for (const v of names) {
+    // plain string check — a regex built from a template literal silently loses its
+    // backslashes (\b becomes a backspace character), so it would match nothing
+    assert.ok(copy.includes(v + ":"), `VIEW_COPY is missing an entry for "${v}"`);
+  }
+  // and even if one is ever missing, navigation must not throw
+  assert.match(js, /VIEW_COPY\[v\] \|\|/, "showView falls back when a view has no copy");
+});

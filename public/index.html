@@ -338,9 +338,10 @@ body{
   display:flex;align-items:center;gap:10px;min-width:0;
 }
 .side-acct .av{
-  width:30px;height:30px;border-radius:50%;flex:0 0 30px;display:grid;place-items:center;
-  background:var(--cyan-dim);color:var(--cyan);font-size:12px;font-weight:700;
+  width:30px;height:30px;border-radius:8px;flex:0 0 30px;display:grid;place-items:center;
+  background:var(--cyan-dim);color:var(--cyan);font-size:12px;font-weight:700;overflow:hidden;
 }
+.side-acct .av img{width:100%;height:100%;object-fit:contain}
 .side-acct .ai{min-width:0}
 .side-acct .an{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .side-acct .aw{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -1744,7 +1745,8 @@ const VIEW_COPY = {
   overview: { t: "Overview", s: "What Joule has saved you, and the quality held while saving it." },
   activity: { t: "Activity", s: "Every request Joule has handled for you." },
   reports:  { t: "Reports", s: "Export your figures and read exactly how each one is calculated." },
-  settings: { t: "Settings", s: "Your keys, models and workspace configuration." }
+  settings: { t: "Settings", s: "Your keys, models and workspace configuration." },
+  profile:  { t: "Profile", s: "Your account — email, password, company logo and subscription." }
 };
 let CURRENT_VIEW = "overview";
 
@@ -1757,9 +1759,12 @@ function showView(v) {
     a.classList.toggle("on", on);
     if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   });
+  // A missing copy entry must never break navigation: without this fallback, opening a
+  // view with no VIEW_COPY entry threw here and the renderer below was never reached, so
+  // the panel appeared but stayed completely empty. That is what broke Profile.
   const h = gel("pageTitle"), sub = gel("pageSub");
-  if (h && v !== "home") { h.textContent = VIEW_COPY[v].t; sub.textContent = VIEW_COPY[v].s; }
-  if (h && v === "home") { h.textContent = VIEW_COPY.home.t; sub.textContent = VIEW_COPY.home.s; }
+  const copy = VIEW_COPY[v] || { t: v.charAt(0).toUpperCase() + v.slice(1), s: "" };
+  if (h) { h.textContent = copy.t; sub.textContent = copy.s; }
   // the heading block itself belongs to whichever view is active
   if (v === "overview") { paintValue(); paintWeek(); }
   if (v === "settings") { paintProviderState(); paintInstanceSettings(); paintStatus(); paintKeys(); paintPlan(); }
@@ -1865,6 +1870,7 @@ const DOT = (s) => '<span class="gdot" style="background:' + (s === "ok" || s ==
 async function paintStatus() {
   const box = gel("statusBody"); if (!box) return;
   let s; try { s = await (await fetch("/api/status")).json(); } catch { box.innerHTML = '<div class="empty-log">Status unavailable.</div>'; return; }
+  if (!s || !s.components || !s.components.proxy) { box.innerHTML = '<div class="mini-empty"><span class="me-i">○</span><span>Status unavailable right now.</span></div>'; return; }
   const c = s.components;
   const up = c.proxy.uptimeSeconds;
   const upTxt = up > 86400 ? Math.floor(up / 86400) + "d " + Math.floor((up % 86400) / 3600) + "h" : up > 3600 ? Math.floor(up / 3600) + "h " + Math.floor((up % 3600) / 60) + "m" : Math.floor(up / 60) + "m";
@@ -2460,8 +2466,10 @@ function wireProfile(canAuth) {
 
 // The sidebar mark is the tenant's logo when one is set, else the Joule mark.
 function paintBranding() {
-  const slot = gel("sideLogo"); if (!slot) return;
   const logo = ME && ME.branding && ME.branding.logo;
+  const av = gel("acctAv");
+  if (av && logo) av.innerHTML = '<img src="' + esc(logo) + '" alt="">';   // company logo, not a round monogram
+  const slot = gel("sideLogo"); if (!slot) return;
   slot.innerHTML = logo
     ? '<img src="' + esc(logo) + '" alt="">'
     : '<img src="logo-mark.png" alt="" onerror="this.style.display=\'none\'"><span class="sl-t">Joule</span>';
