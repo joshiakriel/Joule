@@ -96,6 +96,9 @@ const config = {
     // AES-256-GCM key for encrypting per-tenant upstream keys at rest. In DRY_RUN a
     // deterministic dev key is derived so offline tests work; set a real 64-hex key in prod.
     encKey: process.env.JOULE_ENC_KEY || "",
+    // The key being rotated AWAY from. Secrets still encrypted under it are decrypted and
+    // transparently re-encrypted under the current key, so rotation never orphans data.
+    encKeyPrevious: process.env.JOULE_ENC_KEY_PREVIOUS || "",
     keyPrefix: process.env.JOULE_KEY_PREFIX || "jk_live_", // customer key prefix
     defaultTenantId: process.env.DEFAULT_TENANT_ID || "00000000-0000-0000-0000-000000000001",
     // PUBLIC (browser) Supabase values — served to the dashboard by GET /api/auth-config so

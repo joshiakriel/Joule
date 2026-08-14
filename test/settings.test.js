@@ -454,3 +454,47 @@ test("a workspace that never set a key reports 'none' (genuine first-time setup)
   const me = await (await fetch(base + "/api/me", { headers: auth(jwtFor(T.id, { email: "f@co.com" })) })).json();
   assert.equal(me.onboarding.providerKeyState, "none");
 });
+
+// ---- encryption-key rotation must never orphan a stored provider key ----
+test("a secret encrypted under an OLDER key is recovered and re-encrypted, not lost", async () => {
+  const saved = { cur: config.auth.encKey, prev: config.auth.encKeyPrevious };
+  try {
+    // 1. stored while JOULE_ENC_KEY was UNSET (the built-in default) — the common real case
+    config.auth.encKey = ""; config.auth.encKeyPrevious = "";
+    const T = tenancy.createTenant("rotate");
+    tenancy.setUpstreamKey(T.id, "sk-original");
+    assert.equal(tenancy.providerKeyState(T.id), "ok");
+
+    // 2. the operator now SETS JOULE_ENC_KEY and redeploys
+    config.auth.encKey = "newly-set-encryption-key";
+    assert.equal(tenancy.getUpstreamKey(T.id), "sk-original", "the key is recovered, not orphaned");
+    assert.equal(tenancy.providerKeyState(T.id), "ok", "and no longer reports 'unreadable'");
+
+    // 3. it was re-encrypted under the NEW key, so removing the fallback keeps it working
+    config.auth.encKeyPrevious = "";
+    assert.equal(tenancy.getUpstreamKey(T.id), "sk-original", "rotation completed itself");
+
+    // 4. an explicit rotation via JOULE_ENC_KEY_PREVIOUS also recovers
+    config.auth.encKeyPrevious = "newly-set-encryption-key";
+    config.auth.encKey = "second-rotation-key";
+    assert.equal(tenancy.getUpstreamKey(T.id), "sk-original", "previous-key rotation recovers");
+    config.auth.encKeyPrevious = "";
+    assert.equal(tenancy.getUpstreamKey(T.id), "sk-original", "and completes itself again");
+  } finally { config.auth.encKey = saved.cur; config.auth.encKeyPrevious = saved.prev; }
+});
+
+test("a secret encrypted under a key we no longer have is reported, never silently 'none'", () => {
+  const saved = { cur: config.auth.encKey, prev: config.auth.encKeyPrevious };
+  try {
+    config.auth.encKey = "key-A"; config.auth.encKeyPrevious = "";
+    const T = tenancy.createTenant("lost");
+    tenancy.setUpstreamKey(T.id, "sk-lost");
+    // rotate twice with no JOULE_ENC_KEY_PREVIOUS — the original key is genuinely gone
+    config.auth.encKey = "key-B";
+    assert.equal(tenancy.getUpstreamKey(T.id), null);
+    assert.equal(tenancy.providerKeyState(T.id), "unreadable", "stored but unreadable — NOT 'none'");
+    // and naming the old key recovers it
+    config.auth.encKeyPrevious = "key-A";
+    assert.equal(tenancy.getUpstreamKey(T.id), "sk-lost", "JOULE_ENC_KEY_PREVIOUS recovers it");
+  } finally { config.auth.encKey = saved.cur; config.auth.encKeyPrevious = saved.prev; }
+});

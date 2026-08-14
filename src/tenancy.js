@@ -306,10 +306,29 @@ function purgeTenant(tenantId) {
 }
 
 // ---- per-tenant upstream key encryption (AES-256-GCM) ----
-function encKey() {
-  if (config.auth.encKey) return crypto.createHash("sha256").update(config.auth.encKey).digest(); // 32 bytes from provided secret
-  return crypto.createHash("sha256").update("joule-dev-enc::" + config.auth.defaultTenantId).digest(); // deterministic dev key (DRY_RUN)
+/**
+ * Encryption keys to TRY when decrypting, newest first:
+ *   1. JOULE_ENC_KEY            — the current key, always used for writing
+ *   2. JOULE_ENC_KEY_PREVIOUS   — the key being rotated away from
+ *   3. the built-in dev fallback — what was used before JOULE_ENC_KEY was ever set
+ *
+ * Without (2) and (3), setting or changing JOULE_ENC_KEY silently orphaned every stored
+ * provider key: the ciphertext was still there but could never be read again, and the
+ * only "fix" was for each tenant to re-enter their key. Now a secret encrypted under an
+ * older key is decrypted with it and TRANSPARENTLY RE-ENCRYPTED under the current one,
+ * so rotation is a no-op for the user instead of a data-loss event.
+ */
+const devFallbackKey = () => crypto.createHash("sha256").update("joule-dev-enc::" + config.auth.defaultTenantId).digest();
+function encKeyCandidates() {
+  const out = [];
+  if (config.auth.encKey) out.push({ key: crypto.createHash("sha256").update(config.auth.encKey).digest(), label: "current" });
+  if (config.auth.encKeyPrevious) out.push({ key: crypto.createHash("sha256").update(config.auth.encKeyPrevious).digest(), label: "previous" });
+  out.push({ key: devFallbackKey(), label: "built-in default" });   // always the last resort
+  return out;
 }
+
+// Writing always uses the CURRENT key (the first candidate).
+function encKey() { return encKeyCandidates()[0].key; }
 function setUpstreamKey(tenantId, plaintext) {
   ensureTenant(tenantId, tenantId);
   undecryptable.delete(tenantId);
@@ -321,24 +340,36 @@ function setUpstreamKey(tenantId, plaintext) {
   secretsByTenant.set(tenantId, blob);
   persist("persistTenantSecret", tenantId, blob);   // encrypted blob only — never plaintext
 }
+function decryptWith(blob, key) {
+  const d = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(blob.iv, "hex"));
+  d.setAuthTag(Buffer.from(blob.tag, "hex"));
+  return Buffer.concat([d.update(Buffer.from(blob.data, "hex")), d.final()]).toString("utf8");
+}
+
 function getUpstreamKey(tenantId) {
   const s = secretsByTenant.get(tenantId);
   if (!s) return null;
-  try {
-    const d = crypto.createDecipheriv("aes-256-gcm", encKey(), Buffer.from(s.iv, "hex"));
-    d.setAuthTag(Buffer.from(s.tag, "hex"));
-    return Buffer.concat([d.update(Buffer.from(s.data, "hex")), d.final()]).toString("utf8");
-  } catch (e) {
-    // A STORED-BUT-UNREADABLE key is not the same as no key. Returning null for both made
-    // a changed JOULE_ENC_KEY look like "never configured", which silently restarted
-    // onboarding on every login. Log it loudly and let callers tell the two apart via
-    // providerKeyState(). The ciphertext is left intact — only re-entry can fix it.
-    if (!undecryptable.has(tenantId)) {
-      undecryptable.add(tenantId);
-      console.error(`[tenancy] stored provider key for tenant ${tenantId} cannot be decrypted — JOULE_ENC_KEY has changed or is not set. The tenant must re-enter their provider key.`);
+  const candidates = encKeyCandidates();
+  for (let i = 0; i < candidates.length; i++) {
+    let plain;
+    try { plain = decryptWith(s, candidates[i].key); } catch { continue; }   // wrong key — try the next
+    if (i > 0) {
+      // Decrypted with an OLDER key. Re-encrypt under the current one and persist, so the
+      // rotation completes itself instead of leaving the secret one step from unreadable.
+      console.warn(`[tenancy] provider key for tenant ${tenantId} was encrypted with the ${candidates[i].label} encryption key — re-encrypting under the current JOULE_ENC_KEY.`);
+      try { setUpstreamKey(tenantId, plain); } catch (e) { console.error("re-encrypt failed:", e && e.message); }
     }
-    return null;
+    undecryptable.delete(tenantId);
+    return plain;
   }
+  // Genuinely unreadable under every key we know. A STORED-BUT-UNREADABLE secret is not the
+  // same as no secret — reporting null for both made a changed JOULE_ENC_KEY look like
+  // "never configured" and silently restarted onboarding. providerKeyState() tells them apart.
+  if (!undecryptable.has(tenantId)) {
+    undecryptable.add(tenantId);
+    console.error(`[tenancy] stored provider key for tenant ${tenantId} cannot be decrypted with the current key, JOULE_ENC_KEY_PREVIOUS, or the built-in default. Set JOULE_ENC_KEY_PREVIOUS to the old value, or have the tenant re-enter their provider key.`);
+  }
+  return null;
 }
 const undecryptable = new Set();
 
