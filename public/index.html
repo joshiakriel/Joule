@@ -636,9 +636,9 @@ button,.tab,.gs-btn,.tb-danger,a.tab{font-family:var(--sans);border-radius:10px;
 
 /* PROFILE */
 .logo-row{display:flex;align-items:center;gap:20px;flex-wrap:wrap;margin:16px 0 4px}
-.logo-prev{width:180px;height:56px;border:1px dashed var(--line2);border-radius:12px;display:grid;
+.logo-prev{width:260px;height:88px;border:1px dashed var(--line2);border-radius:12px;display:grid;
   place-items:center;background:rgba(255,255,255,.02);overflow:hidden;flex:0 0 auto}
-.logo-prev img{max-width:160px;max-height:44px;object-fit:contain}
+.logo-prev img{max-width:236px;max-height:72px;object-fit:contain}
 .rg{border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:0 0 16px}
 .rg legend{font-size:12.5px;color:var(--muted2);padding:0 6px}
 .rg label{display:flex;align-items:center;gap:9px;font-size:13.5px;padding:6px 0;cursor:pointer}
@@ -650,8 +650,14 @@ button,.tab,.gs-btn,.tb-danger,a.tab{font-family:var(--sans);border-radius:10px;
 .side-acct:hover{background:rgba(255,255,255,.04)}
 .side-acct .acct-x{margin-left:auto;color:var(--muted2);opacity:.7;flex:0 0 auto}
 .side-acct:hover .acct-x{color:var(--cyan);opacity:1}
-/* rectangular logo slot so a real company wordmark fits (Profile upload lands here) */
+/* Joule's own mark, top-left — never replaced by a customer logo */
 .side-logo img{height:30px;max-width:150px;width:auto;object-fit:contain}
+/* the CUSTOMER's logo: full sidebar width, tall enough for a real wordmark */
+.co-logo{display:none;align-items:center;justify-content:center;width:100%;height:56px;
+  padding:8px 10px;margin-bottom:12px;border-radius:10px;background:rgba(255,255,255,.03);
+  border:1px solid var(--line)}
+.co-logo img{max-width:100%;max-height:40px;width:auto;height:auto;object-fit:contain;display:block}
+@media (max-width:900px){ .co-logo{width:auto;min-width:120px;height:40px;margin:0 10px 0 0} .co-logo img{max-height:28px} }
 </style>
 </head>
 <body>
@@ -738,6 +744,7 @@ button,.tab,.gs-btn,.tb-danger,a.tab{font-family:var(--sans);border-radius:10px;
       <a href="#reports" data-nav="reports"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg><span>Reports</span></a>
       <a href="#settings" data-nav="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.65 1.65 0 0 0 15 19.4a1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.5.6.86 1.11.9H21a2 2 0 1 1 0 4h-.09c-.51.04-.97.4-1.11.9z"/></svg><span>Settings</span></a>
     </nav>
+    <div class="co-logo" id="coLogo" style="display:none"></div>
     <div class="side-acct" id="acctBtn" role="button" tabindex="0" title="Your profile">
       <div class="av" id="acctAv">J</div>
       <div class="ai"><div class="an" id="acctName">Your workspace</div><div class="aw" id="acctSub">signed in</div></div><span class="acct-x" id="acctChev"></span>
@@ -2465,14 +2472,21 @@ function wireProfile(canAuth) {
 }
 
 // The sidebar mark is the tenant's logo when one is set, else the Joule mark.
+// Joule's own mark at the TOP of the sidebar is ours and never changes — a customer's
+// logo must not overwrite the product's identity. Their logo gets its own full-width
+// rectangular slot above the account row, sized for a real wordmark.
 function paintBranding() {
   const logo = ME && ME.branding && ME.branding.logo;
+  const slot = gel("sideLogo");
+  if (slot) slot.innerHTML = '<img src="logo-mark.png" alt="" onerror="this.style.display=\'none\'"><span class="sl-t">Joule</span>';
+  const co = gel("coLogo");
+  if (co) {
+    co.innerHTML = logo ? '<img src="' + esc(logo) + '" alt="Your company logo">' : "";
+    co.style.display = logo ? "flex" : "none";
+  }
+  // the account chip goes back to a monogram; the logo has its own proper slot now
   const av = gel("acctAv");
-  if (av && logo) av.innerHTML = '<img src="' + esc(logo) + '" alt="">';   // company logo, not a round monogram
-  const slot = gel("sideLogo"); if (!slot) return;
-  slot.innerHTML = logo
-    ? '<img src="' + esc(logo) + '" alt="">'
-    : '<img src="logo-mark.png" alt="" onerror="this.style.display=\'none\'"><span class="sl-t">Joule</span>';
+  if (av && !av.textContent) av.textContent = "J";
 }
 
 /* ---------- §4 collapsible test tool · §7 profile entry · icons ---------- */

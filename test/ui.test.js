@@ -159,3 +159,22 @@ test("every view has copy, so navigating to it cannot throw", () => {
   // and even if one is ever missing, navigation must not throw
   assert.match(js, /VIEW_COPY\[v\] \|\|/, "showView falls back when a view has no copy");
 });
+
+test("a customer logo never replaces Joule's own mark", () => {
+  // Uploading a company logo overwrote the product's own sidebar mark. A customer's
+  // branding must not replace ours; it gets its own slot.
+  const pb = js.slice(js.indexOf("function paintBranding"), js.indexOf("function paintBranding") + 900);
+  assert.ok(pb.includes("logo-mark.png"), "the top slot always renders the Joule mark");
+  assert.ok(!/slot\.innerHTML = logo/.test(pb), "the top slot is never swapped for the customer logo");
+  assert.ok(pb.includes("coLogo"), "the customer logo has its own dedicated slot");
+  assert.match(html, /id="coLogo"/, "that slot exists in the markup");
+
+  // and it is sized for a real wordmark, not a 30px chip
+  const co = /\.co-logo\{[^}]*\}/.exec(html);
+  assert.ok(co, ".co-logo is styled");
+  assert.match(co[0], /width:100%/, "full sidebar width");
+  const h = /height:(\d+)px/.exec(co[0]);
+  assert.ok(h && Number(h[1]) >= 48, `the logo slot is at least 48px tall (found ${h && h[1]}px)`);
+  const img = /\.co-logo img\{[^}]*\}/.exec(html);
+  assert.match(img[0], /object-fit:contain/, "logos are contained, never cropped or stretched");
+});
