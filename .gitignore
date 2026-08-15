@@ -14,3 +14,5 @@ Joule_Investor_QA*.pdf
 
 # stray root asset copies — canonical logos live in public/
 /Assets/
+
+audit-findings.json
