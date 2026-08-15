@@ -1995,7 +1995,7 @@ function paintDocs() {
       '<div class="sec-h">Cost — measured</div>' +
       '<p class="view-sub">Token counts returned by your provider × that provider\'s published prices. Exact arithmetic, not a projection.</p>' +
       '<div class="sec-h">Energy — estimated</div>' +
-      '<p class="view-sub">Modelled per request: a base per tier, plus a per-1k-output-token term, plus a much smaller per-1k-input-token term (inference energy is dominated by the decode phase). Anchored to published GPU characterisation methodology. <b>Not</b> measured from hardware power draw.</p>' +
+      '<p class="view-sub">Modelled per request: a base per tier, plus a per-1k-output-token term, plus a much smaller per-1k-input-token term (inference energy is dominated by the decode phase — an output token is modelled at about <b>10x</b> the energy of an input token). That 10x is a <b>per-token</b> rate: comparing two whole requests shows a smaller ratio, because the fixed base term dominates at low token counts. Anchored to published GPU characterisation methodology. <b>Not</b> measured from hardware power draw.</p>' +
       '<div class="sec-h">Carbon — estimated</div>' +
       '<p class="view-sub">Energy × grid carbon intensity for your region — live from Electricity Maps when configured, otherwise a clearly-labelled fallback constant. Aligned to GHG Protocol Scope 2 and the SCI (ISO/IEC 21031) approach. Its accuracy is bounded by the energy estimate above.</p>' +
       '<div class="sec-h">Savings — a counterfactual</div>' +

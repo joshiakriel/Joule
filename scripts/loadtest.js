@@ -19,7 +19,7 @@ const TARGET = (process.argv[2] || process.env.LOAD_TARGET || "http://localhost:
 const CONCURRENCY = Number(process.env.LOAD_CONCURRENCY || 100);
 const REQUESTS = Number(process.env.LOAD_REQUESTS || 3000);
 const BUDGET_K = Number(process.env.LOAD_BUDGET_K || 25);
-const BUDGET_SESSION = "loadtest-budget-session";
+const BUDGET_SESSION = "loadtest-budget-" + Math.random().toString(36).slice(2, 10);
 
 // deterministic-ish prompt mix (no wall-clock dependence in the content)
 const SIMPLE = ["hi thanks", "summarise this briefly", "translate hello to french", "say hello", "one short greeting"];
@@ -52,7 +52,8 @@ async function worker(queue, results) {
       const dt = performance.now() - t0;
       results.latencies.push(dt);
       results.byStatus[res.status] = (results.byStatus[res.status] || 0) + 1;
-      if (res.status !== 200) results.nonOk++;
+      if (res.status === 429) results.budgetRejected++;      // enforcement working, not a fault
+      else if (res.status !== 200) results.nonOk++;
       await res.text(); // drain
     } catch (err) {
       results.errors++;
@@ -84,7 +85,7 @@ async function main() {
   // ---- main mixed load ----
   const jobs = plan(REQUESTS);
   const queue = jobs.slice();
-  const results = { latencies: [], byStatus: {}, nonOk: 0, errors: 0, errList: [] };
+  const results = { latencies: [], byStatus: {}, nonOk: 0, budgetRejected: 0, errors: 0, errList: [] };
   const rss0 = process.memoryUsage().rss;
   const start = performance.now();
   await Promise.all(Array.from({ length: CONCURRENCY }, () => worker(queue, results)));
@@ -107,7 +108,7 @@ async function main() {
   console.log("── throughput & latency (Joule overhead, DRY_RUN) ──");
   console.log(`  completed:   ${lat.length} in ${elapsed.toFixed(2)}s  =>  ${(lat.length / elapsed).toFixed(0)} req/s`);
   console.log(`  latency ms:  p50=${pct(lat, 50).toFixed(1)}  p95=${pct(lat, 95).toFixed(1)}  p99=${pct(lat, 99).toFixed(1)}  max=${Math.max(...lat).toFixed(1)}`);
-  console.log(`  statuses:    ${JSON.stringify(results.byStatus)}  nonOk=${results.nonOk}  errors=${results.errors}`);
+  console.log(`  statuses:    ${JSON.stringify(results.byStatus)}  unexpected=${results.nonOk}  budget-rejected=${results.budgetRejected}  errors=${results.errors}`);
   console.log(`  rss growth:  ${((rss1 - rss0) / 1e6).toFixed(1)} MB (client-side; the server's exact cache is bounded by CACHE_MAX_ENTRIES)`);
 
   // ---- correctness assertions ----
@@ -118,7 +119,8 @@ async function main() {
   const conserved = t.routedSmall + t.routedLarge; // cache hits are a subset of routed (they still pick a tier)
   add("conservation: small + large == requests", conserved === t.requests, `${t.routedSmall}+${t.routedLarge}=${conserved} vs ${t.requests}`);
   add("no lost/dropped requests", lat.length === REQUESTS && results.errors === 0, `completed ${lat.length}/${REQUESTS}, errors ${results.errors}`);
-  add("no unexpected non-200s in the main mix", results.nonOk === 0, `nonOk=${results.nonOk}`);
+  add("no unexpected non-200s (429s from budget enforcement are correct, not faults)", results.nonOk === 0,
+    `unexpected=${results.nonOk}, budget-rejected=${results.budgetRejected} (expected when BUDGET_ENFORCE is on)`);
   add("cache hits recorded (concurrent identical requests)", t.cacheHits > 0, `cacheHits=${t.cacheHits}`);
 
   // reconciliation: stats == report == store aggregate (byte-identical totals)

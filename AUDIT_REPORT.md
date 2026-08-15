@@ -55,18 +55,24 @@ B targeting A's key returns 404. A's provider secret never appears in any respon
 
 ## Part B · Load (10 → 100 → 250 concurrent, 1,500 requests each)
 
-| Concurrency | Throughput | p50 | p95 | p99 | Errors | Lost |
-|---|---|---|---|---|---|---|
-| 10 | 1,599 req/s | 5.6 ms | 9.2 ms | 17.5 ms | 0 | 0 |
-| 100 | 1,757 req/s | 50.1 ms | 89.7 ms | 118.9 ms | 0 | 0 |
-| 250 | 1,720 req/s | 121.6 ms | 232.1 ms | 261.9 ms | 0 | 0 |
+| Concurrency | p50 | p95 | p99 | Errors | Lost |
+|---|---|---|---|---|---|
+| 10 | 5.6 ms | 9.2 ms | 17.5 ms | 0 | 0 |
+| 100 | 50.1 ms | 89.7 ms | 118.9 ms | 0 | 0 |
+| 250 | 121.6 ms | 232.1 ms | 261.9 ms | 0 | 0 |
+
+**Throughput is NOT reported as a headline figure.** Across repeated runs on this machine it
+varied between **292 and 1,757 req/s** for an identical workload, because background processes
+accumulated during the audit session. The absolute number is an artefact of the test machine,
+not a property of the product. Latency percentiles above are from the clean early runs. A
+trustworthy throughput figure needs an isolated host — **do not quote one until then.**
 
 **Correctness held at every level:**
 - **Conservation** — `small + large == total` exactly (1150+300=1450, 1050+300=1350). Nothing lost or double-counted.
 - **Reconciliation** — `/api/stats == /api/report` identical after thousands of concurrent writes.
 - **No leaked reservations** — `reserved=$0, calls=0` at every level.
 - **No unhandled promise rejections** in the server log across all runs.
-- **Throughput is flat from 100→250** while latency scales linearly — queuing, not degradation. No pool-exhaustion hangs, no errors.
+- **Latency scales linearly with concurrency** while nothing is lost — queuing, not degradation. No pool-exhaustion hangs, no errors.
 
 **Budget integrity — verified separately and it PASSES.** A clean probe (120 fully-concurrent
 requests, one fresh session, cap 40) returned **exactly 40 × 200 and 80 × 429**. The cap holds
@@ -124,11 +130,11 @@ An audit that hides its own mistakes is worthless, so:
    compressed by the fixed `baseWh` (0.05 Wh), which dominates at low token counts. My threshold
    was mis-specified.
 
-**A real harness defect also surfaced (not a product bug):** `scripts/loadtest.js` reports
-`budget integrity: ok200=0` and counts legitimate 429s as "unexpected non-200s". With
-enforcement off the same run is **1500/1500, zero errors**, and the clean probe proves the cap
-works exactly. **The load harness's budget check is unreliable and should be fixed** — it would
-cry wolf in CI.
+**A real harness defect also surfaced (not a product bug) — NOW FIXED.** `scripts/loadtest.js`
+counted legitimate budget 429s as errors, and reused one constant session name so the burst
+reported `ok200=0`. Both fixed: 429s are counted separately as `budget-rejected`, and each run
+uses a fresh session. The harness now reports **all 7 checks passing, budget integrity exactly
+40 of 120**.
 
 ---
 
@@ -143,7 +149,7 @@ cry wolf in CI.
 - **Quality honesty is real.** I attempted to force a fake 100% and could not.
 - **Tenant isolation holds** under direct attack across every surface tested.
 - **Degrades honestly** under 10 injected failures — no leaks, no corruption, process stays up.
-- **~1,700 req/s with p95 under 90 ms at 100 concurrent**, correctness intact.
+- **Correctness holds under load** at 10/100/250 concurrent: nothing lost, nothing double-counted, no leaked reservations. (Throughput itself is not yet a quotable figure — see Part B.)
 
 ### Backed, with a caveat worth stating
 - **"Energy is decode-weighted"** is true at the **marginal** rate (10×). On a *total-per-request*
@@ -151,11 +157,18 @@ cry wolf in CI.
   customer measures totals and expects 10×, they will see less. Say *"per generated token"*.
 - **Energy remains an estimate**, never measured from hardware. Correctly labelled; do not let
   it drift into "measured" in sales copy.
-- **Load figures are DRY_RUN** — Joule's own overhead, excluding provider latency. That is the
-  honest and useful number, but it must be presented as such.
+- **Load figures are DRY_RUN** — Joule's own overhead, excluding provider latency, and measured on
+  a contended machine. Latency percentiles are indicative; **throughput is not quotable** until
+  re-measured on an isolated host.
 
 ### Not yet backed — do not claim
-- **RLS at the database layer was NOT exercised.** Isolation was proven at the **application**
+- **RLS at the database layer was NOT exercised in this audit** (no Postgres available offline).
+  **Now addressed at runtime:** `GET /api/status` returns `components.isolation`, which checks the
+  LIVE database for (a) RLS enabled AND forced with a policy on every tenant table, and (b) whether
+  the connecting role has BYPASSRLS/SUPERUSER — which would silently defeat every policy. Check it
+  on the deployed instance; it reports `enforced: true` only when both hold. Until you have seen it
+  say true, the two-layer claim remains half-verified.
+- ~~**RLS at the database layer was NOT exercised.**~~ Isolation was proven at the **application**
   layer only; the live-DB RLS test remains skipped without a Postgres instance. The two-layer
   defence-in-depth claim is **half-verified**. Until it runs against a real database, say
   "application-enforced isolation, with RLS configured".

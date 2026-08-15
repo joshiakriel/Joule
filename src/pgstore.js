@@ -171,13 +171,66 @@ function create({ databaseUrl, ssl, poolMax = 5, connectTimeoutMs = 5000, statem
     return rows[0] || { records: 0, keys: 0, users: 0 };
   }
 
+  /**
+   * Verify that row-level security is ACTUALLY in force, in the live database.
+   *
+   * An offline test suite cannot prove this — it needs a real Postgres — so the check runs
+   * where the database exists. It answers the two questions that decide whether the
+   * DB-layer half of tenant isolation is real:
+   *   1. Is RLS enabled AND forced on every tenant-scoped table, with a policy attached?
+   *      (ENABLE alone is not enough: without FORCE the table owner bypasses it.)
+   *   2. Does the role we connect as BYPASS RLS? Supabase's default `postgres` role often
+   *      does, and that silently defeats every policy no matter how correct it is.
+   * Returns a structured verdict; never throws.
+   */
+  async function checkRls() {
+    const tables = ["records", "users", "api_keys", "tenant_secrets"];
+    try {
+      const { rows: t } = await pool.query(
+        `SELECT c.relname AS table, c.relrowsecurity AS enabled, c.relforcerowsecurity AS forced,
+                (SELECT count(*) FROM pg_policy p WHERE p.polrelid = c.oid) AS policies
+           FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = 'public' AND c.relname = ANY($1)`, [tables]);
+      const { rows: r } = await pool.query(
+        "SELECT current_user AS role, (SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user) AS bypasses, rolsuper FROM pg_roles WHERE rolname = current_user");
+      const role = r[0] || {};
+      const perTable = {};
+      let allProtected = true;
+      for (const name of tables) {
+        const row = t.find((x) => x.table === name);
+        const ok = Boolean(row && row.enabled && row.forced && Number(row.policies) > 0);
+        perTable[name] = row
+          ? { enabled: row.enabled, forced: row.forced, policies: Number(row.policies), protected: ok }
+          : { missing: true, protected: false };
+        if (!ok) allProtected = false;
+      }
+      // A bypassing role makes the policies decorative — say so rather than reporting green.
+      const bypasses = Boolean(role.bypasses || role.rolsuper);
+      return {
+        available: true,
+        enforced: allProtected && !bypasses,
+        tables: perTable,
+        connectedRole: role.role || null,
+        roleBypassesRls: bypasses,
+        note: bypasses
+          ? `RLS policies are configured, but the connecting role "${role.role}" BYPASSES row-level security, so the database is not enforcing tenant isolation. Connect as a role without BYPASSRLS/SUPERUSER to make the DB-layer guarantee real.`
+          : allProtected
+            ? "Row-level security is enabled and FORCED on every tenant table, with policies attached, and the connecting role does not bypass it."
+            : "One or more tenant tables are missing RLS, FORCE, or a policy — see `tables`."
+      };
+    } catch (e) {
+      return { available: false, enforced: null, error: e && e.message ? e.message : String(e),
+        note: "Could not verify row-level security against the database." };
+    }
+  }
+
   const flush = () => queue;
   const close = async () => { await queue.catch(() => {}); if (!_pool) await pool.end(); };
   const health = () => ({ backend: "postgres", status: degraded ? "degraded" : "ok", pendingWrites: pending.length, droppedWrites: dropped });
 
   return { ensureSchema, load, persistAdd, persistVerification, persistClear, persistClearTenant,
     loadIdentity, persistTenant, persistUser, persistApiKey, persistRevokeKey, persistTenantSecret,
-    persistEmailChangedAt, persistLogo, deleteTenant,
+    persistEmailChangedAt, persistLogo, deleteTenant, checkRls,
     recover, flush, close, health, isDegraded: () => degraded };
 }
 

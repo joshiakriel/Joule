@@ -380,5 +380,7 @@ module.exports = {
   predicateFor, rangeCutoff,
   backend: () => backend,
   // the durable handle, so identity (tenancy.js) can share this pool. null on memory backend.
-  durable: () => pg
+  durable: () => pg,
+  // Live verification that the DB is actually enforcing tenant isolation (postgres only).
+  checkRls: () => (pg && pg.checkRls ? pg.checkRls() : Promise.resolve({ available: false, enforced: null, note: "Memory backend: isolation is enforced by the application only; there is no database layer to verify." }))
 };

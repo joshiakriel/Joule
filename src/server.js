@@ -881,13 +881,18 @@ app.get("/api/status", async (req, res) => {
   let grid = { status: "unknown" };
   try { const g = await getIntensity(); grid = { status: g.live ? "live" : "fallback", source: g.source, zone: g.zone }; } catch { grid = { status: "fallback" }; }
   const latency = store.latencyStats(store.predicateFor({ tenant }));
+  let isolation = { available: false, enforced: null };
+  try { isolation = await store.checkRls(); } catch (e) { isolation = { available: false, enforced: null, error: e && e.message }; }
   res.json({
     ok: true,
     components: {
       proxy: { status: "ok", uptimeSeconds: Math.floor(process.uptime()), startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString() },
       database: { status: db.status, backend: db.backend, pendingWrites: db.pendingWrites || 0 },
       provider: prov,
-      grid
+      grid,
+      // Is the DATABASE actually enforcing tenant isolation? Offline tests cannot prove
+      // this; it is checked here, live, where the database exists.
+      isolation
     },
     // MEASURED end-to-end durations for this workspace — null when nothing to measure.
     latency,
