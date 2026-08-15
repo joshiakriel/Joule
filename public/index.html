@@ -1200,13 +1200,20 @@ function paintAccount() {
   av.textContent = (email ? email[0] : "J").toUpperCase();
 }
 
-// A stored-but-undecryptable provider key looks identical to "never configured". Say which.
+/* A stored-but-undecryptable provider key looks identical to "never configured", so say
+   which. AUDIENCE SPLIT: a customer is told the cause and the one action they can take —
+   they have no access to the deployment's encryption key and naming it only leaks our
+   internals. The operator diagnostic (which env var, and how to recover) goes to the
+   server log and /api/status, and is shown inline only to an actual operator. */
 function providerKeyBanner() {
   const st = ME && ME.onboarding && ME.onboarding.providerKeyState;
   if (st !== "unreadable") return "";
-  return '<div class="warn-once" style="margin-bottom:14px">Your provider key is saved, but this deployment can no longer decrypt it — ' +
-    'the encryption key (JOULE_ENC_KEY) has changed or is missing. Re-enter your provider key below to fix it. ' +
-    'Your usage history and savings are unaffected.</div>';
+  const operatorHint = (ME && ME.isOperator)
+    ? '<br><span class="muted">Operator: this deployment\'s JOULE_ENC_KEY has changed or is unset. ' +
+      'Set JOULE_ENC_KEY_PREVIOUS to the old value to recover stored keys automatically.</span>'
+    : '';
+  return '<div class="warn-once" style="margin-bottom:14px">We can\'t read your saved provider key on this deployment. ' +
+    'Please re-enter it below — your usage history and savings are unaffected.' + operatorHint + '</div>';
 }
 
 async function startApp() {
@@ -1226,7 +1233,11 @@ async function bootAuth() {
   if (!AUTH_CFG.configured) {                          // auth on but Supabase not wired up yet
     gel("authGate").style.display = "flex";
     gel("authForm").style.display = "none";
-    gel("authSub").textContent = "This deployment requires sign-in, but Supabase is not configured yet. Set SUPABASE_URL and SUPABASE_ANON_KEY on the server.";
+    // Pre-auth screen: nobody is signed in, so this cannot be gated on isOperator. It must
+    // therefore be customer-safe. The operator sees the real cause in the server log and in
+    // /api/auth-config ({configured:false}), which are operator surfaces.
+    gel("authSub").textContent = "Sign-in isn't available on this deployment yet. Please contact your administrator.";
+    console.warn("[auth] sign-in unavailable: SUPABASE_URL and/or SUPABASE_ANON_KEY are not set on the server.");
     return;
   }
   if (await restoreSession()) { gel("authGate").style.display = "none"; return startApp(); }
@@ -1688,8 +1699,13 @@ let loadedCfg = {};
 
 function sessionExpired() {
   const b = gel("banner");
+  // Same audience split: the customer gets the action, not our env-var names. The
+  // operator-only diagnostic is appended when the signed-in identity is an operator.
   if (b) { b.className = "banner warn"; b.style.display = "block";
-    b.textContent = "Your session expired, or this deployment can't verify your sign-in. Sign in again — if it keeps happening, the operator needs to check SUPABASE_JWT_SECRET."; }
+    b.innerHTML = "Your session has expired. Please sign in again." +
+      ((ME && ME.isOperator)
+        ? ' <span class="muted">Operator: if this persists, check that SUPABASE_JWT_SECRET matches the Supabase project.</span>'
+        : ""); }
 }
 
 async function loadConfig() {

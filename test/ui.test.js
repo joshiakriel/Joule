@@ -178,3 +178,30 @@ test("a customer logo never replaces Joule's own mark", () => {
   const img = /\.co-logo img\{[^}]*\}/.exec(html);
   assert.match(img[0], /object-fit:contain/, "logos are contained, never cropped or stretched");
 });
+
+test("operator env-var names are never shown to a normal customer", () => {
+  // Two customer-facing messages named JOULE_ENC_KEY and SUPABASE_JWT_SECRET. A customer
+  // has no access to either, can do nothing about them, and should not learn our internals.
+  // Operator diagnostics are allowed, but ONLY behind an isOperator check.
+  const SECRET_NAMES = ["JOULE_ENC_KEY", "JOULE_ENC_KEY_PREVIOUS", "SUPABASE_JWT_SECRET", "SUPABASE_ANON_KEY", "DATABASE_URL", "OPERATOR_EMAILS"];
+  const code = js.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+  for (const name of SECRET_NAMES) {
+    let from = 0, at;
+    while ((at = code.indexOf(name, from)) !== -1) {
+      from = at + name.length;
+      // the mention must sit inside a branch gated on isOperator
+      const context = code.slice(Math.max(0, at - 160), at);
+      const line = code.slice(code.lastIndexOf("\n", at) + 1, at);
+      if (/console\.(warn|error|log)/.test(line)) continue;   // developer console, never rendered
+      assert.ok(/isOperator/.test(context),
+        `"${name}" appears in customer-facing UI without an isOperator gate. Customers cannot act on deployment secrets and should not see their names.\n  context: ...${code.slice(Math.max(0, at - 120), at + 60).replace(/\s+/g, " ")}`);
+    }
+  }
+
+  // and the customer-facing wording still says what to DO
+  // avoid the apostrophe entirely — it is backslash-escaped in the HTML source
+  assert.match(js, /read your saved provider key on this deployment/, "customer gets a plain-English cause");
+  assert.match(js, /Please re-enter it below/, "and the one action they can take");
+  assert.match(js, /Your session has expired\. Please sign in again\./, "session message is customer-appropriate");
+});
